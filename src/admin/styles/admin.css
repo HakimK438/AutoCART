@@ -1,0 +1,4 @@
+/* Admin custom styles */
+.admin-sidebar-active {
+  @apply bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/20;
+}

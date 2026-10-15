@@ -1,0 +1,23 @@
+import React from 'react';
+import { Routes, Route } from 'react-router-dom';
+import CustomerRoutes from './CustomerRoutes';
+import AdminRoutes from './AdminRoutes';
+import { Navigate } from 'react-router-dom';
+import RoleLogin from '../pages/auth/RoleLogin';
+import SellerCenter from '../pages/seller/SellerCenter';
+import ProtectedRoute from '../components/layout/ProtectedRoute';
+
+export const AppRoutes = () => {
+  return (
+    <Routes>
+      <Route path="/preview" element={<Navigate to="/" replace />} />
+      <Route path="/admin/login" element={<RoleLogin role="admin" />} />
+      <Route path="/seller/login" element={<RoleLogin role="seller" />} />
+      <Route path="/seller/dashboard" element={<ProtectedRoute roles={['SELLER']}><SellerCenter /></ProtectedRoute>} />
+      <Route path="/admin/*" element={<AdminRoutes />} />
+      <Route path="/*" element={<CustomerRoutes />} />
+    </Routes>
+  );
+};
+
+export default AppRoutes;
