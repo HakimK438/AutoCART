@@ -169,7 +169,7 @@ Tests use saved sample text instead of the real OCR, so they run without Tessera
 
 ## AI agents by role: requirements and honest status (updated)
 
-Goal: a customer, seller and admin experience that is useful in real life, using free tools only (Groq/Gemini free tiers with a rule-based fallback, local OCR, OpenStreetMap, Razorpay TEST mode only).
+Goal: a customer, seller and admin experience that is useful in real life, using free tools only (Groq/Gemini free tiers with a rule-based fallback, local OCR, OpenStreetMap; no payment gateway: pay on delivery, at the store, or UPI straight to the seller).
 
 Rules for every agent: answer only from data in our database; never invent products, prices, reviews or stock; say "I don't know" and offer a human; show why a suggestion was made; no personal documents sent to any LLM.
 
@@ -189,7 +189,7 @@ Rules for every agent: answer only from data in our database; never invent produ
 
 Visibility rules (built and browser-tested): customers never see admin or seller links or data; sellers see only their own products and order share; admin tools live behind /admin/login, seller tools behind /seller/login.
 
-Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products have wrong photos or an absurd price in seed data; real Razorpay test checkout and Gmail sending need your own keys in .env; legal pages missing.
+Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products have wrong photos or an absurd price in seed data; real Gmail sending needs your own app password in .env; legal pages missing.
 ### Assistants and seller business model (updated)
 
 - **Saathi** (customer assistant): greets the signed-in customer by first name, remembers only categories, a usual budget and the last few searches (table `UserMemory`), and the customer can see and delete this from the chat ("What Saathi remembers" and "Forget everything"). Answers use real catalogue and the customer's own orders. Gemini is used when available; a database-grounded engine is the fallback.
@@ -197,3 +197,6 @@ Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products 
 - The old "Advanced assistant" drawer was removed from the chat.
 - **Seller dashboard**: revenue-per-day chart, best sellers chart, and an earnings breakdown (item total, commission, what the seller keeps), each with a plain-language headline.
 - **Business model** (`backend/api/commission.py`, public at `/api/commission`): free to join, list and no monthly fee; commission only on a sale, by category (Electronics 5%, Fashion 10%, Home & Kitchen 8%, Beauty 8%, Sports 7%, Books 4%, Grocery 3%, Toys 7%, default 6%); online payments add the payment provider charge (about 2%) at cost. These are proposed launch rates modelled on how large Indian marketplaces charge referral fees, not a signed price list or exact copies of any company's rates.
+
+### Free AI stack in use (updated)
+LangGraph + langchain-core (agent graph), fastembed with BAAI/bge-small-en-v1.5 from Hugging Face (free, local retrieval), Gemini free tier (wording), OSRM public server and OpenStreetMap (routes and tiles), RapidOCR (documents).

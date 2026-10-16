@@ -21,8 +21,10 @@ from rest_framework.response import Response
 
 from .agents.engine import AgentEngine
 from .notify import send_email
-from .assistant_memory import learn, personalise
-from .models import ChatMessage, ChatSession, SupportTicket, TicketMessage
+from . import agent_graph
+from .assistant_memory import first_name, learn, memory_note, personalise
+
+from .models import ChatMessage, ChatSession, Order, SupportTicket, TicketMessage, UserMemory
 from .views import get_user_from_token
 
 ADMIN_ROLES = ('ADMIN', 'STAFF')
@@ -172,10 +174,17 @@ def support_chat_view(request):
                 query=message, customer_email=user.email if user else '', cart_items=request.data.get('cartItems') or [],
                 session_id=session.id)
         else:
-            result = orchestrator.run_discovery_agent(query=message, session_id=session.id, customer_email=user.email if user else '')
+            last = ChatMessage.objects.filter(session=session, role='assistant').exclude(cards=[]).order_by('-createdAt').first()
+            result = agent_graph.run(message, name=first_name(user), memory=memory_note(UserMemory.objects.filter(userEmail=user.email.lower()).first()) if user else '',
+                                     last_cards=last.cards if last else [])
         reply = str(result.get('reply') or "I couldn't find that. Want me to bring in a person?")
 
     cards = _cards(result)
+    order_card = next((c for c in cards if c.get('type') == 'order'), None)
+    if order_card and user:
+        note = _where_is_my_order(order_card['id'], user)
+        if note:
+            reply = f"{reply}\n\n{note}"
     learn(user, message)
     reply = personalise(user, reply, session.id + message)
     ChatMessage.objects.create(id=_short('msg'), session=session, role='assistant', content=reply,
@@ -186,6 +195,7 @@ def support_chat_view(request):
     return Response({
         'sessionId': session.id, 'reply': reply, 'agent': result.get('agent'), 'cards': cards, 'suggestedActions': actions[:5],
         'escalated': escalated, 'ticketId': ticket_id, 'provider': result.get('llmProvider', 'grounded-engine'),
+        'buyProductId': result.get('buyProductId', ''),
     })
 
 
@@ -316,3 +326,36 @@ def support_summary_view(request):
         'chats': ChatSession.objects.count(), 'averageRating': round(sum(ratings) / len(ratings), 2) if ratings else None,
         'ratedChats': len(ratings),
     })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def support_last_address_view(request):
+    """The delivery address from the customer's latest order, so the chat can offer a one-tap re-order. Only their own."""
+    user = get_user_from_token(request)
+    if not user:
+        return Response({'detail': 'Please sign in.'}, status=http.HTTP_401_UNAUTHORIZED)
+    order = Order.objects.filter(customerEmail__iexact=user.email).exclude(shippingAddress={}).order_by('-date', '-id').first()
+    a = (order.shippingAddress if order else {}) or {}
+    if not a.get('addressLine'):
+        return Response({'address': None})
+    keep = ('fullName', 'phone', 'addressLine', 'city', 'state', 'pinCode', 'latitude', 'longitude')
+    return Response({'address': {**{k: a[k] for k in keep if k in a}, 'fulfillment': 'delivery'}})
+
+
+def _where_is_my_order(order_id, user):
+    """A plain sentence on where the customer's own order is now: which store, how far, and what step it is at."""
+    from .seller_orders import _km, drop_point, order_pickup
+    order = Order.objects.filter(id=order_id, customerEmail__iexact=user.email).first()
+    if not order:
+        return ''
+    pickup, drop = order_pickup(order), drop_point(order)
+    step = {'Packed': 'It has been packed and is ready to leave the store.', 'Confirmed': 'The seller is getting it ready.', 'Pending': 'It is waiting for payment or the seller to confirm.',
+            'Delivered': 'It has been delivered.', 'Cancelled': 'It was cancelled.'}.get(order.status, f'Status: {order.status}.')
+    where = ''
+    if pickup:
+        where = f" It is with {pickup['name']}"
+        if drop:
+            where += f", about {_km((pickup['lat'], pickup['lng']), (drop['lat'], drop['lng'])):.1f} km from your delivery address"
+        where += '.'
+    return f"{step}{where} Tap the order below to see the route on the map."

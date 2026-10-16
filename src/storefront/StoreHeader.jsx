@@ -57,7 +57,7 @@ export default function StoreHeader() {
     if (q) navigate(`/search?q=${encodeURIComponent(q)}`);
   };
 
-  const place = [location?.area, location?.city].filter(Boolean).join(', ') || 'Choose your area';
+  const place = location?.source === 'default' ? 'Set your location' : [location?.area, location?.city].filter(Boolean).join(', ') || 'Choose your area';
   const firstName = user?.name?.split(' ')[0];
   const isAdmin = user?.role === 'ADMIN' || user?.role === 'STAFF';
 

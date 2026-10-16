@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
+import { reverseGeocode } from '../utils/geocode';
 
 const LocationContext = createContext();
 
@@ -73,35 +74,19 @@ export const LocationProvider = ({ children }) => {
         const lat = pos.coords.latitude;
         const lng = pos.coords.longitude;
 
-        try {
-          // Resolve nearest known store / city from backend
-          const res = await api.get(`/stores/nearby?lat=${lat}&lng=${lng}&radius=35`);
-          const nearest = (res.data?.stores || [])[0];
-          const newLoc = {
-            lat,
-            lng,
-            city: nearest?.city || 'Bengaluru',
-            area: nearest?.address?.split(',')[0] || 'Nearby Location',
-            pincode: nearest?.pincode || '',
-            displayName: nearest ? `${nearest.city} (~${nearest.distanceKm} km to store)` : 'Live GPS Location',
-            source: 'browser',
-            permissionStatus: 'granted',
-          };
-          saveLocation(newLoc);
-        } catch {
-          saveLocation({
-            lat,
-            lng,
-            city: 'Current Location',
-            area: 'Local Area',
-            pincode: '',
-            displayName: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-            source: 'browser',
-            permissionStatus: 'granted',
-          });
-        } finally {
-          setLoading(false);
-        }
+        // Look up the street address for these coordinates, and the nearest store for the serviceability message.
+        const [place, near] = await Promise.all([
+          reverseGeocode(lat, lng),
+          api.get(`/stores/nearby?lat=${lat}&lng=${lng}&radius=35`).then((r) => (r.data?.stores || [])[0]).catch(() => null),
+        ]);
+        const area = place?.area || near?.address?.split(',')[0] || 'Current location';
+        const city = place?.city || near?.city || 'Mumbai';
+        saveLocation({
+          lat, lng, city, area, line: place?.line || '', state: place?.state || '', pincode: place?.pincode || near?.pincode || '',
+          displayName: [place?.line || area, city, place?.pincode].filter(Boolean).join(', '),
+          source: 'browser', permissionStatus: 'granted',
+        });
+        setLoading(false);
       },
       (err) => {
         setLoading(false);

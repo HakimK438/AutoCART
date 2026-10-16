@@ -57,7 +57,7 @@ export default function SupportPage() {
           {tickets.map((t) => (
             <button key={t.id} onClick={() => { setCreating(false); show(t.id); }} className="ac-act" style={{ width: '100%', textAlign: 'left', borderRadius: 16, margin: '4px 0', display: 'block', color: 'var(--ink)', background: open?.id === t.id ? 'var(--brand-soft)' : '#fff' }}>
               <b style={{ display: 'block' }}>{t.subject}</b>
-              <span className="ac-chip-status" data-tone={TONE[t.status]}>{nice(t.status)}</span> <span className="ac-muted" style={{ fontSize: 13 }}>{t.id}</span>
+              <span className="ac-chip-status" data-tone={TONE[t.status]}>{nice(t.status)}</span> <span className="ac-muted" style={{ fontSize: 14 }}>{t.id}</span>
             </button>
           ))}
         </div>

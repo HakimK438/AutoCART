@@ -131,6 +131,7 @@ REST_FRAMEWORK = {
 # Tests never call a real AI service.
 if 'test' in sys.argv:
     os.environ['AUTOCART_DISABLE_LLM'] = '1'
+    os.environ['AUTOCART_DISABLE_EMBEDDINGS'] = '1'  # keyword search in tests: no model download, same answers every run
     PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']  # fast hashing, tests only
 
 

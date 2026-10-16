@@ -24,7 +24,7 @@ export default function HowItWorks({ compact = false }) {
           <h3 style={{ marginTop: 18 }}>What it costs</h3>
           <p className="ac-muted">Joining ₹{terms.joiningFee} · Listing ₹{terms.listingFee} · Monthly ₹{terms.monthlyFee}. Commission is charged only on a sale, as a share of the item price:</p>
           <div className="ac-ratechips">{terms.rates.map((r) => <span key={r.category}>{r.category} <b>{r.percent}%</b></span>)}</div>
-          <p className="ac-muted" style={{ fontSize: 13, marginTop: 8 }}>Online payments also carry the payment provider charge (about {terms.paymentFeePercent}%), passed on at cost. {terms.note}</p>
+          <p className="ac-muted" style={{ fontSize: 14, marginTop: 8 }}>Online payments also carry the payment provider charge (about {terms.paymentFeePercent}%), passed on at cost. {terms.note}</p>
         </>
       )}
     </section>

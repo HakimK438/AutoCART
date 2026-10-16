@@ -1,9 +1,11 @@
+import { useAuth } from '../hooks/useAuth';
 import React, { createContext, useState, useEffect } from 'react';
 import { cartService } from '../services/cartService';
 
 export const CartContext = createContext(null);
 
 export const CartProvider = ({ children }) => {
+  const { user } = useAuth();
   const [cartItems, setCartItems] = useState(() => {
     const saved = localStorage.getItem('auracart_cart');
     return saved ? JSON.parse(saved) : [];
@@ -15,7 +17,26 @@ export const CartProvider = ({ children }) => {
     localStorage.setItem('auracart_cart', JSON.stringify(cartItems));
   }, [cartItems]);
 
-  const addToCart = (product, quantity = 1) => {
+  // After a visitor signs in as a customer, put what they wanted in the cart (and continue to checkout for Buy now).
+  useEffect(() => {
+    if (!user || user.role !== 'CUSTOMER') return;
+    let pending = null;
+    try { pending = JSON.parse(sessionStorage.getItem('autocart_pending_buy') || 'null'); sessionStorage.removeItem('autocart_pending_buy'); } catch { pending = null; }
+    if (!pending?.product) return;
+    setCartItems((prev) => (prev.some((i) => i.id === pending.product.id) ? prev : [...prev, { ...pending.product, quantity: pending.quantity || 1 }]));
+    if (pending.buyNow) window.dispatchEvent(new CustomEvent('autocart:resume-buy'));
+  }, [user]);
+
+  const addToCart = (product, quantity = 1, opts = {}) => {
+    // Only customer accounts can buy. A visitor goes to the customer sign-in (their choice is remembered);
+    // a seller or admin gets an explanation. Both are handled by BuyGate.
+    if (!user || user.role !== 'CUSTOMER') {
+      if (!user) {
+        try { sessionStorage.setItem('autocart_pending_buy', JSON.stringify({ product, quantity, buyNow: !!opts.buyNow })); } catch { /* private mode: they just add it again after signing in */ }
+      }
+      window.dispatchEvent(new CustomEvent('autocart:buy-blocked', { detail: { role: user?.role || null } }));
+      return false;
+    }
     setCartItems((prev) => {
       const existing = prev.find((item) => item.id === product.id);
       if (existing) {
@@ -25,6 +46,7 @@ export const CartProvider = ({ children }) => {
       }
       return [...prev, { ...product, quantity }];
     });
+    return true;
   };
 
   const removeFromCart = (productId) => {

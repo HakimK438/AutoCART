@@ -4,6 +4,7 @@ import { X, Send, Search, PackageSearch, RotateCcw, Headset, Plus, Check, Refres
 import api from '../services/api';
 import { useAuth } from '../hooks/useAuth';
 import { useCart } from '../hooks/useCart';
+import { orderService } from '../services/orderService';
 import { money, sized } from './parts';
 import { LogoMark } from './Brand';
 import './storefront.css';
@@ -28,7 +29,7 @@ const Rich = ({ text }) => text.split('\n').map((line, i) => (
   </React.Fragment>
 ));
 
-const ProductCard = ({ c, onClose }) => {
+const ProductCard = ({ c, onClose, onBuy }) => {
   const { addToCart } = useCart();
   const [added, setAdded] = useState(false);
   const off = c.originalPrice > c.price;
@@ -43,7 +44,8 @@ const ProductCard = ({ c, onClose }) => {
             onClick={() => { addToCart({ id: c.id, name: c.name, price: c.price, originalPrice: c.originalPrice, rating: c.rating, stock: c.stock, images: c.image ? [c.image] : [] }, 1); setAdded(true); window.setTimeout(() => setAdded(false), 1600); }}>
             {added ? <><Check size={14} /> Added</> : <><Plus size={14} /> Add to cart</>}
           </button>
-          <Link to={`/products/${c.id}`} className="ac-btn ac-btn-outline ac-btn-small ac-pcard-btn" onClick={onClose}>View</Link>
+          <button className="ac-btn ac-btn-outline ac-btn-small ac-pcard-btn ac-buy-chat" disabled={c.stock <= 0} onClick={() => onBuy?.(c)}>Buy now</button>
+          <Link to={`/products/${c.id}`} className="ac-btn ac-btn-soft ac-btn-small ac-pcard-btn" onClick={onClose}>View</Link>
         </div>
       </div>
     </div>
@@ -53,7 +55,7 @@ const ProductCard = ({ c, onClose }) => {
 export default function SupportChat({ isOpen, onClose }) {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { cartItems } = useCart();
+  const { cartItems, addToCart } = useCart();
   const [messages, setMessages] = useState([]);
   const [actions, setActions] = useState([]);
   const [input, setInput] = useState('');
@@ -66,6 +68,30 @@ export default function SupportChat({ isOpen, onClose }) {
   const [memory, setMemory] = useState(null);
   const showMemory = () => api.get('/support/memory').then((r) => setMemory(r.data)).catch(() => setMemory({ error: true }));
   const forget = () => api.delete('/support/memory').then(() => setMemory({ name: user?.name?.split(' ')[0], interests: [], recentSearches: [], budgetMax: null, chats: 0 })).catch(() => {});
+  const [buying, setBuying] = useState(null); // { card, qty, address, saving, error }
+  const say = (text, extra = {}) => setMessages((m) => [...m, { from: 'bot', text, at: clock(), ...extra }]);
+
+  /** Start ordering from the chat. A signed-in customer with a past address gets a one-tap confirm; others go to checkout. */
+  const startBuy = async (card) => {
+    if (!user) { say('Please sign in with a customer account first, then I can place this order for you.'); setActions(['Sign in']); return; }
+    if (user.role !== 'CUSTOMER') { say('Seller and admin accounts cannot place orders. Sign out and use a customer account to buy.'); return; }
+    try {
+      const { data } = await api.get('/support/last-address');
+      if (!data.address) { if (addToCart({ id: card.id, name: card.name, price: card.price, originalPrice: card.originalPrice, rating: card.rating, stock: card.stock, images: card.image ? [card.image] : [] }, 1) === false) return; onClose(); navigate('/checkout'); return; }
+      setBuying({ card, qty: 1, address: data.address, saving: false, error: '' });
+    } catch { say('I could not start the order. Please try again, or use the cart.'); }
+  };
+  const confirmBuy = async () => {
+    setBuying((b) => ({ ...b, saving: true, error: '' }));
+    try {
+      const order = await orderService.createOrder({ items: [{ id: buying.card.id, quantity: buying.qty }], paymentMethod: 'Cash on Delivery', shippingAddress: buying.address });
+      say(`Done${first ? `, ${first}` : ''}! Your order **${order.id}** is placed. Total ${money(order.totalAmount)}, pay on delivery. I will keep it on your Orders page so you can track it.`, { cards: [{ type: 'order', id: order.id, status: order.status, total: order.totalAmount, payment: order.paymentStatus }] });
+      setBuying(null); setActions(['Track my order', 'Find something else']);
+    } catch (e) {
+      setBuying((b) => ({ ...b, saving: false, error: e?.response?.data?.detail || 'We could not place the order. Please try again.' }));
+    }
+  };
+
   const body = useRef(null);
   const end = useRef(null);
   const field = useRef(null);
@@ -89,6 +115,8 @@ export default function SupportChat({ isOpen, onClose }) {
       setSessionId(data.sessionId); saveSession(user?.email, data.sessionId);
       setMessages((m) => [...m, { from: 'bot', text: data.reply, cards: data.cards || [], at: clock() }]);
       setActions(data.suggestedActions || []);
+      const wanted = data.buyProductId && (data.cards || []).find((c) => c.id === data.buyProductId);
+      if (wanted) startBuy(wanted);
     } catch {
       setError('We could not reach support just now. Check your connection and try again.');
     } finally { setBusy(false); }
@@ -164,15 +192,37 @@ export default function SupportChat({ isOpen, onClose }) {
               </div>
               {m.cards?.length > 0 && (
                 <div className="ac-cardrow">
-                  {m.cards.map((c) => c.type === 'product' ? <ProductCard key={c.id} c={c} onClose={onClose} /> : (
+                  {m.cards.map((c) => c.type === 'product' ? <ProductCard key={c.id} c={c} onClose={onClose} onBuy={startBuy} /> : (
                     <Link key={c.id} to={`/orders/${c.id}`} className="ac-mini-card" onClick={onClose}>
-                      <div style={{ gridColumn: '1 / -1' }}><b>Order {c.id}</b><span>{c.status} · {money(c.total)} · {c.payment}</span></div>
+                      <div style={{ gridColumn: '1 / -1' }}><b>Order {c.id}</b><span>{c.status} · {money(c.total)} · {c.payment}</span><span style={{ color: 'var(--brand-ink)', fontWeight: 700 }}>See where it is on the map →</span></div>
                     </Link>
                   ))}
                 </div>
               )}
             </React.Fragment>
           ))}
+          {buying && (
+            <div className="ac-buybox" role="region" aria-label="Confirm your order">
+              <b>Confirm your order</b>
+              <div className="ac-row" style={{ justifyContent: 'space-between' }}>
+                <span>{buying.card.name}</span>
+                <span className="ac-row" style={{ gap: 6 }}>
+                  <button type="button" aria-label="Fewer" onClick={() => setBuying((b) => ({ ...b, qty: Math.max(1, b.qty - 1) }))}>−</button>
+                  <b>{buying.qty}</b>
+                  <button type="button" aria-label="More" onClick={() => setBuying((b) => ({ ...b, qty: Math.min(5, b.qty + 1) }))}>+</button>
+                </span>
+              </div>
+              <small>{money(buying.card.price * buying.qty)} for the item. Delivery fee, if any, is added when you confirm.</small>
+              <small>Deliver to: {[buying.address.addressLine, buying.address.city, buying.address.pinCode].filter(Boolean).join(', ')}</small>
+              <small>Pay: Cash on delivery</small>
+              {buying.error && <small role="alert" style={{ color: 'var(--coral)' }}>{buying.error}</small>}
+              <div className="ac-row">
+                <button className="ac-btn ac-btn-blue ac-btn-small" onClick={confirmBuy} disabled={buying.saving}>{buying.saving ? 'Placing…' : 'Confirm order'}</button>
+                <button className="ac-btn ac-btn-soft ac-btn-small" onClick={() => { addToCart({ id: buying.card.id, name: buying.card.name, price: buying.card.price, originalPrice: buying.card.originalPrice, rating: buying.card.rating, stock: buying.card.stock, images: buying.card.image ? [buying.card.image] : [] }, buying.qty); setBuying(null); onClose(); navigate('/checkout'); }}>Change address or payment</button>
+                <button className="ac-btn ac-btn-soft ac-btn-small" onClick={() => setBuying(null)}>Cancel</button>
+              </div>
+            </div>
+          )}
           {busy && <div className="ac-typing" aria-label="Typing"><i /><i /><i /></div>}
 
           {handoff && (

@@ -6,6 +6,7 @@ import { useAuth } from '../../hooks/useAuth';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import { emailPattern } from '../../utils/validators';
+import RoleTabs from './RoleTabs';
 import { LogIn, Lock, Mail, ShieldAlert } from 'lucide-react';
 
 export const Login = () => {
@@ -24,8 +25,8 @@ export const Login = () => {
     formState: { errors },
   } = useForm({
     defaultValues: {
-      email: 'customer@example.com',
-      password: 'password',
+      email: '',
+      password: '',
     },
   });
 
@@ -36,6 +37,8 @@ export const Login = () => {
       const res = await login(data.email, data.password);
       if (res.user.role === 'ADMIN') {
         navigate('/admin');
+      } else if (res.user.role === 'SELLER') {
+        navigate('/seller/dashboard');
       } else {
         navigate(from, { replace: true });
       }
@@ -59,6 +62,7 @@ export const Login = () => {
   return (
     <div className="ac ac-auth">
       <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-xl space-y-6">
+        {location.state?.customerOnly ? <p className="text-center text-sm font-semibold text-gray-700">Sign in with your customer account to buy.</p> : <RoleTabs current="customer" />}
         <div className="text-center space-y-2">
           <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white font-extrabold text-2xl flex items-center justify-center mx-auto shadow-md">
             A

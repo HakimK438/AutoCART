@@ -102,8 +102,8 @@ export default function ProductPage() {
     ['Who sells it?', product.seller ? `${product.seller}, a seller on AutoCart.` : 'A verified seller on AutoCart.'],
   ];
 
-  const add = () => { addToCart(product, qty); setAdded(true); window.setTimeout(() => setAdded(false), 1800); };
-  const buyNow = () => { addToCart(product, qty); navigate('/checkout'); };
+  const add = () => { if (addToCart(product, qty) === false) return; setAdded(true); window.setTimeout(() => setAdded(false), 1800); };
+  const buyNow = () => { if (addToCart(product, qty, { buyNow: true }) !== false) navigate('/checkout'); };
   const lens = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     setZoom({ x: ((e.clientX - r.left) / r.width) * 100, y: ((e.clientY - r.top) / r.height) * 100 });

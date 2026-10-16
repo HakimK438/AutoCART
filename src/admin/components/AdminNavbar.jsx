@@ -1,58 +1,39 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, Bell, Search, Sparkles, AlertTriangle, AlertCircle, ShoppingBag, CheckCheck, Trash2, X, ChevronRight } from 'lucide-react';
+import { Menu, Bell, Search, Sparkles, AlertTriangle, AlertCircle, ShoppingBag, CheckCheck, Trash2, X, ChevronRight, LogOut, Store, Settings, ChevronDown, ClipboardCheck } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
+import api from '../../services/api';
 
-const INITIAL_NOTIFICATIONS = [
-  {
-    id: 'notif-1',
-    type: 'critical',
-    title: 'High-Risk Seller Flagged (Score: 85/100)',
-    message: 'Direct Import Hub: Missing legal business name, verified email, and GSTIN tax credentials.',
-    time: '10m ago',
-    unread: true,
-    link: '/admin/ai-seller-onboarding',
-    actionText: 'Review in Agent C',
-  },
-  {
-    id: 'notif-2',
-    type: 'critical',
-    title: 'Offshore Vendor Compliance Warning',
-    message: 'Shadow Dropship Express: Disposable email domain (mailcatch.xyz) and unverified offshore address.',
-    time: '35m ago',
-    unread: true,
-    link: '/admin/ai-seller-onboarding',
-    actionText: 'Inspect Application',
-  },
-  {
-    id: 'notif-3',
-    type: 'warning',
-    title: 'Low Stock Inventory Alert',
-    message: '3 catalog products are running critically low (Milton Thermosteel, Boldfit Sipper).',
-    time: '1h ago',
-    unread: true,
-    link: '/admin/products',
-    actionText: 'Manage Inventory',
-  },
-  {
-    id: 'notif-4',
-    type: 'info',
-    title: 'New Customer Order #ORD-2026-9042',
-    message: 'Verified order for ₹3,499 received from customer via Cash on Delivery.',
-    time: '2h ago',
-    unread: false,
-    link: '/admin/orders',
-    actionText: 'View Order',
-  },
-];
+const TYPE = { bad: 'critical', warn: 'warning', info: 'info', good: 'info' };
+
+/** Turn the admin briefing (real counts from the database) into bell alerts. */
+const toAlerts = (briefing = []) => briefing.map((b, i) => ({
+  id: `b-${i}`, type: TYPE[b.level] || 'info', title: b.text, message: '', time: 'Now',
+  unread: b.level === 'bad' || b.level === 'warn', link: b.link || '/admin', actionText: b.link ? 'Open' : 'Dashboard',
+}));
 
 export const AdminNavbar = ({ onToggleSidebar }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef(null);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState([]);
   const [filter, setFilter] = useState('all'); // 'all' | 'unread'
   const dropdownRef = useRef(null);
+
+  useEffect(() => { api.get('/admin/overview').then((r) => setNotifications(toAlerts(r.data.briefing))).catch(() => setNotifications([])); }, []);
+
+  // Close the profile menu on an outside click or Esc
+  useEffect(() => {
+    if (!profileOpen) return undefined;
+    const out = (e) => { if (profileRef.current && !profileRef.current.contains(e.target)) setProfileOpen(false); };
+    const esc = (e) => { if (e.key === 'Escape') setProfileOpen(false); };
+    document.addEventListener('mousedown', out); document.addEventListener('keydown', esc);
+    return () => { document.removeEventListener('mousedown', out); document.removeEventListener('keydown', esc); };
+  }, [profileOpen]);
+
+  const signOut = () => { setProfileOpen(false); logout(); navigate('/admin/login'); };
 
   const unreadCount = notifications.filter(n => n.unread).length;
 
@@ -167,14 +148,14 @@ export const AdminNavbar = ({ onToggleSidebar }) => {
               <div className="p-4 border-b border-gray-100 bg-gray-50/70 flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="font-extrabold text-sm text-gray-900">Admin Alerts</h3>
+                    <h3 className="font-extrabold text-sm text-gray-900">What needs attention</h3>
                     {unreadCount > 0 && (
                       <span className="px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 text-[10px] font-extrabold">
                         {unreadCount} new
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-gray-500 mt-0.5">Real-time marketplace monitoring</p>
+                  <p className="text-[11px] text-gray-500 mt-0.5">Worked out from your live data</p>
                 </div>
                 <div className="flex items-center gap-1">
                   {unreadCount > 0 && (
@@ -235,7 +216,7 @@ export const AdminNavbar = ({ onToggleSidebar }) => {
                     <Bell className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                     <p className="text-xs font-bold text-gray-700">No alerts right now</p>
                     <p className="text-[11px] text-gray-400 mt-1">
-                      All seller applications, orders, and inventory systems are in check.
+                      Seller applications, tickets, orders and stock are all in check.
                     </p>
                   </div>
                 ) : (
@@ -305,15 +286,33 @@ export const AdminNavbar = ({ onToggleSidebar }) => {
 
         <div className="h-6 w-px bg-gray-200" />
 
-        {/* Profile */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-indigo-600 text-white font-bold text-xs flex items-center justify-center shadow">
-            {user?.name ? user.name.charAt(0).toUpperCase() : 'A'}
-          </div>
-          <div className="hidden sm:block text-left">
-            <p className="text-xs font-bold text-gray-900 leading-tight">{user?.name || 'Admin User'}</p>
-            <p className="text-[10px] text-gray-400 font-semibold uppercase">Administrator</p>
-          </div>
+        {/* Profile menu */}
+        <div className="relative" ref={profileRef}>
+          <button onClick={() => setProfileOpen((v) => !v)} aria-haspopup="menu" aria-expanded={profileOpen} aria-label="Open account menu"
+            className="flex items-center gap-3 rounded-xl px-2 py-1 hover:bg-gray-100 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
+            <span className="w-9 h-9 rounded-full bg-indigo-600 text-white font-bold text-sm flex items-center justify-center shadow">
+              {user?.name ? user.name.charAt(0).toUpperCase() : 'A'}
+            </span>
+            <span className="hidden sm:block text-left">
+              <span className="block text-sm font-bold text-gray-900 leading-tight">{user?.name || 'Admin User'}</span>
+              <span className="block text-xs text-gray-500 font-semibold uppercase">Administrator</span>
+            </span>
+            <ChevronDown className={`w-4 h-4 text-gray-500 transition ${profileOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {profileOpen && (
+            <div role="menu" className="absolute right-0 mt-3 w-72 bg-white rounded-2xl shadow-2xl border border-gray-200 z-50 overflow-hidden">
+              <div className="p-4 border-b border-gray-100 bg-gray-50">
+                <p className="font-bold text-gray-900">{user?.name || 'Admin User'}</p>
+                <p className="text-sm text-gray-500 break-all">{user?.email}</p>
+              </div>
+              <div className="p-2 text-sm font-semibold text-gray-800">
+                <Link role="menuitem" to="/admin/ai-seller-onboarding" onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-100"><ClipboardCheck className="w-4 h-4" /> Seller applications</Link>
+                <Link role="menuitem" to="/admin/settings" onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-100"><Settings className="w-4 h-4" /> Settings</Link>
+                <Link role="menuitem" to="/" onClick={() => setProfileOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-gray-100"><Store className="w-4 h-4" /> View the customer store</Link>
+                <button role="menuitem" onClick={signOut} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-red-700 hover:bg-red-50"><LogOut className="w-4 h-4" /> Sign out</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </header>

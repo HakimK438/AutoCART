@@ -44,6 +44,7 @@ const Field = ({ id, label, hint, error, children }) => (
 export default function SellerApplyPage() {
   const { user } = useAuth();
   const [step, setStep] = useState(0);
+  const [justSubmitted, setJustSubmitted] = useState(false);
   const [categories, setCategories] = useState([]);
   const [app, setApp] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -55,7 +56,7 @@ export default function SellerApplyPage() {
   const [form, setForm] = useState({
     companyName: '', storeName: '', contactName: user?.name || '', email: user?.email || '', phone: user?.phone || '', businessType: 'Retailer',
     gstin: '', pan: '', address: '', city: 'Mumbai', state: 'Maharashtra', pincode: '',
-    productCategories: [], plannedProducts: [{ name: '', category: '', approxPrice: '' }],
+    productCategories: [], plannedProducts: [{ name: '', category: '', approxPrice: '', stock: '', image: '' }],
   });
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -67,12 +68,15 @@ export default function SellerApplyPage() {
     if (!user) { setLoading(false); return; }
     api.get('/seller/applications').then((r) => {
       const mine = (r.data || []).find((a) => a.ownerUserId === user.id && !['REJECTED'].includes(a.status)) || (r.data || [])[0];
-      if (!mine) return null;
+      if (!mine) {  // first visit: open a draft now so the admin can see this applicant
+        if (user.role === 'CUSTOMER') return api.post('/seller/applications/start').then((d) => setApp(d.data)).catch(() => {});
+        return null;
+      }
       return api.get(`/seller/applications/${mine.id}`).then((d) => {
         const a = d.data;
         setApp(a);
         setForm((f) => ({
-          ...f, companyName: a.companyName || '', storeName: a.storeName || '', contactName: a.applicantName || f.contactName, email: a.email || f.email,
+          ...f, companyName: /store not named yet/.test(a.companyName || '') ? '' : a.companyName || '', storeName: /store not named yet/.test(a.storeName || a.companyName || '') ? '' : a.storeName || '', contactName: a.applicantName || f.contactName, email: a.email || f.email,
           phone: a.phone || '', businessType: a.businessType || 'Retailer', gstin: a.gstin || '', pan: a.pan || '', address: a.address || '',
           city: a.city || 'Mumbai', state: a.addressState || 'Maharashtra', pincode: a.pincode || '', productCategories: a.productCategories || [],
           plannedProducts: a.plannedProducts?.length ? a.plannedProducts : f.plannedProducts,
@@ -84,7 +88,8 @@ export default function SellerApplyPage() {
   }, [user]);
 
   const docByType = useMemo(() => Object.fromEntries((app?.documents || []).map((d) => [d.docType, d])), [app]);
-  const submitted = app && FINAL.includes(app.status);
+  // After pressing Submit, always show the confirmation, even when documents are still missing (status: needs more information).
+  const submitted = app && (FINAL.includes(app.status) || (justSubmitted && app.status === 'NEEDS_MORE_INFORMATION'));
   const editing = !submitted;
 
   const locate = async () => {
@@ -101,7 +106,7 @@ export default function SellerApplyPage() {
     try {
       const { data } = await api.post('/seller/applications', {
         ...form, storeLatitude: pin.lat, storeLongitude: pin.lng,
-        plannedProducts: form.plannedProducts.filter((p) => p.name.trim()).map((p) => ({ ...p, approxPrice: Number(p.approxPrice) || 0 })),
+        plannedProducts: form.plannedProducts.filter((p) => p.name.trim()).map((p) => ({ ...p, approxPrice: Number(p.approxPrice) || 0, stock: Number(p.stock) || 0 })),
       });
       setApp(data);
       return true;
@@ -133,12 +138,27 @@ export default function SellerApplyPage() {
   };
 
   const submit = async () => {
-    setBusy('submit'); setMessage('');
-    try { const { data } = await api.post(`/seller/applications/${app.id}/submit`); setApp(data); window.scrollTo({ top: 0 }); }
+    if (!agree) {  // say why nothing happened, and show the box
+      setSubmitNote('Please tick the confirmation box above, then press Submit again.');
+      document.getElementById('agree-box')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return;
+    }
+    setSubmitNote(''); setBusy('submit'); setMessage('');
+    try { const { data } = await api.post(`/seller/applications/${app.id}/submit`); setApp(data); setJustSubmitted(true); window.scrollTo({ top: 0 }); }
     catch (e) { setMessage(e?.response?.data?.detail || 'We could not submit your application.'); }
     setBusy('');
   };
 
+  const [photoBusy, setPhotoBusy] = useState(-1);
+  const [submitNote, setSubmitNote] = useState('');
+  const planPhoto = async (i, file) => {
+    if (!file || !app) { if (!app) setMessage('One moment, your application is still being set up. Try again in a few seconds.'); return; }
+    setPhotoBusy(i); setMessage('');
+    const body = new FormData(); body.append('image', file);
+    try { const { data } = await api.post(`/seller/applications/${app.id}/product-image`, body); setProduct(i, 'image', data.url); }
+    catch (e) { setMessage(e?.response?.data?.detail || 'That photo did not upload. Use a JPG or PNG under 5 MB.'); }
+    setPhotoBusy(-1);
+  };
   const setProduct = (i, k, v) => set('plannedProducts', form.plannedProducts.map((p, n) => (n === i ? { ...p, [k]: v } : p)));
 
   if (loading) return <div className="ac ac-page"><div className="ac-wrap"><div className="ac-skel" style={{ height: 320 }} /></div></div>;
@@ -147,7 +167,7 @@ export default function SellerApplyPage() {
     return (
       <div className="ac ac-page"><div className="ac-wrap" style={{ maxWidth: 720 }}>
         <h1 className="ac-display">Sell on AutoCart</h1>
-        <HowItWorks compact />
+        <details className="ac-howfold"><summary>How selling works and what it costs (tap to open)</summary><HowItWorks compact /></details>
         <p className="ac-sub">Reach shoppers near your store. Sign in or create an account first, then tell us about your shop.</p>
         <div className="ac-row" style={{ marginTop: 24 }}>
           <Link to="/login" state={{ from: '/seller/apply' }} className="ac-btn ac-btn-blue">Sign in</Link>
@@ -168,8 +188,12 @@ export default function SellerApplyPage() {
           <p style={{ margin: '14px 0 0', fontSize: 18 }}>{text}</p>
           {app.rejectionReason && <p className="ac-warn" style={{ fontSize: 16 }}>Reason: {app.rejectionReason}</p>}
           {app.status === 'NEEDS_MORE_INFORMATION' && app.adminNotes && <p className="ac-warn" style={{ fontSize: 16 }}>Message from our team: {app.adminNotes}</p>}
+          {app.status === 'NEEDS_MORE_INFORMATION' && (app.missingDocuments || []).length > 0 && (
+            <p className="ac-warn" style={{ fontSize: 16 }}>Still needed: {app.missingDocuments.map((t) => DOCS.find((d) => d.type === t)?.label || t).join(', ')}. Your application is saved and our team can see it. Add these when you have them and it moves forward.</p>
+          )}
           <p className="ac-muted">Store: {app.storeName || app.companyName} · {app.address}, {app.city} {app.pincode}</p>
           <div className="ac-row">
+            {app.status === 'NEEDS_MORE_INFORMATION' && <button className="ac-btn ac-btn-blue" onClick={() => { setJustSubmitted(false); setStep(3); window.scrollTo({ top: 0 }); }}>Add the missing documents</button>}
             {app.status === 'APPROVED' && <Link to="/seller/dashboard" className="ac-btn ac-btn-blue">Go to your seller dashboard</Link>}
             {['REJECTED', 'SUSPENDED'].includes(app.status) && <Link to="/support" className="ac-btn ac-btn-blue">Contact support</Link>}
             <Link to="/" className="ac-btn ac-btn-outline">Back to the store</Link>
@@ -192,12 +216,20 @@ export default function SellerApplyPage() {
   return (
     <div className="ac ac-page"><div className="ac-wrap" style={{ maxWidth: 900 }}>
       <h1 className="ac-display">Sell on AutoCart</h1>
-      <HowItWorks compact />
+      <details className="ac-howfold"><summary>How selling works and what it costs (tap to open)</summary><HowItWorks compact /></details>
       <p className="ac-sub" style={{ marginTop: 18 }}>Tell us about your shop, add your documents, and our team will review your application. It usually takes a few minutes to fill in.</p>
 
       <ol className="ac-steps-bar" aria-label="Application steps" style={{ listStyle: 'none', padding: 0 }}>
-        {STEPS.map((s, i) => <li key={s}><span data-on={i === step} data-done={i < step}>{i < step ? '✓ ' : ''}{s}</span></li>)}
+        {STEPS.map((s, i) => <li key={s}><span data-on={i === step} data-done={i < step}>{i < step ? '✓ ' : ''}{i + 1}. {s}</span></li>)}
       </ol>
+
+      {step !== 3 && (
+        <div className="ac-box ac-docsneeded" role="note" style={{ marginBottom: 20 }}>
+          <b>Keep these ready. You will upload them in step 4 (Documents).</b>
+          <ul>{DOCS.map((d) => <li key={d.type}><span><Upload size={14} /></span> <b>{d.label}</b><small className="ac-muted"> {d.hint}</small></li>)}</ul>
+          <p className="ac-muted" style={{ margin: '8px 0 0', fontSize: 14 }}>The upload section opens after you save steps 1 to 3 (it needs your application to exist first). Your Aadhaar must be the masked copy: we only keep the last 4 digits.</p>
+        </div>
+      )}
 
       {status && app.status === 'NEEDS_MORE_INFORMATION' && (
         <div className="ac-box" style={{ marginBottom: 20, borderColor: 'var(--gold)' }}>
@@ -253,15 +285,28 @@ export default function SellerApplyPage() {
             })}
           </div>
           {form.plannedProducts.map((p, i) => (
-            <div className="ac-grid-2" key={i} style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1.3fr) minmax(0,1fr) auto', alignItems: 'end', marginTop: 12 }}>
-              <Field id={`pn${i}`} label={i === 0 ? 'Product name' : ''}><input id={`pn${i}`} className="ac-input" placeholder="Wireless mouse" value={p.name} onChange={(e) => setProduct(i, 'name', e.target.value)} /></Field>
-              <Field id={`pc${i}`} label={i === 0 ? 'Category' : ''}><select id={`pc${i}`} className="ac-select" value={p.category} onChange={(e) => setProduct(i, 'category', e.target.value)}><option value="">Choose</option>{categories.map((c) => <option key={c.id}>{c.name}</option>)}</select></Field>
-              <Field id={`pp${i}`} label={i === 0 ? 'Price (₹)' : ''}><input id={`pp${i}`} className="ac-input" inputMode="numeric" value={p.approxPrice} onChange={(e) => setProduct(i, 'approxPrice', e.target.value.replace(/\D/g, ''))} /></Field>
-              <button type="button" className="ac-btn ac-btn-outline ac-btn-small" aria-label="Remove product" disabled={form.plannedProducts.length === 1} onClick={() => set('plannedProducts', form.plannedProducts.filter((_, n) => n !== i))}><Trash2 size={16} /></button>
+            <div className="ac-plan" key={i}>
+              <div className="ac-grid-2" style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1.3fr) minmax(0,1fr) auto', alignItems: 'end' }}>
+                <Field id={`pn${i}`} label="Product name"><input id={`pn${i}`} className="ac-input" placeholder="Wireless mouse" value={p.name} onChange={(e) => setProduct(i, 'name', e.target.value)} /></Field>
+                <Field id={`pc${i}`} label="Category"><select id={`pc${i}`} className="ac-select" value={p.category} onChange={(e) => setProduct(i, 'category', e.target.value)}><option value="">Choose</option>{categories.map((c) => <option key={c.id}>{c.name}</option>)}</select></Field>
+                <Field id={`pp${i}`} label="Price (₹)"><input id={`pp${i}`} className="ac-input" inputMode="numeric" value={p.approxPrice} onChange={(e) => setProduct(i, 'approxPrice', e.target.value.replace(/\D/g, ''))} /></Field>
+                <button type="button" className="ac-btn ac-btn-outline ac-btn-small" aria-label="Remove product" disabled={form.plannedProducts.length === 1} onClick={() => set('plannedProducts', form.plannedProducts.filter((_, n) => n !== i))}><Trash2 size={16} /></button>
+              </div>
+              <div className="ac-plan-row">
+                <Field id={`ps${i}`} label="Units in stock"><input id={`ps${i}`} className="ac-input" inputMode="numeric" placeholder="e.g. 25" value={p.stock ?? ''} onChange={(e) => setProduct(i, 'stock', e.target.value.replace(/\D/g, ''))} /></Field>
+                <div>
+                  <span className="ac-lbl">Product photo</span>
+                  <label className="ac-photo-pick">
+                    {p.image ? <img src={p.image} alt="" /> : <Upload size={18} />}
+                    <span>{photoBusy === i ? 'Uploading…' : p.image ? 'Change photo' : 'Add a photo'}</span>
+                    <input type="file" accept="image/*" className="ac-sr" onChange={(e) => { planPhoto(i, e.target.files?.[0]); e.target.value = ''; }} />
+                  </label>
+                </div>
+              </div>
             </div>
           ))}
           {errors.plannedProducts && <span className="ac-err ac-warn" role="alert">{errors.plannedProducts}</span>}
-          <button type="button" className="ac-btn ac-btn-soft ac-btn-small" style={{ marginTop: 16 }} onClick={() => set('plannedProducts', [...form.plannedProducts, { name: '', category: '', approxPrice: '' }])}><Plus size={16} /> Add another product</button>
+          <button type="button" className="ac-btn ac-btn-soft ac-btn-small" style={{ marginTop: 16 }} onClick={() => set('plannedProducts', [...form.plannedProducts, { name: '', category: '', approxPrice: '', stock: '', image: '' }])}><Plus size={16} /> Add another product</button>
         </div>
       )}
 
@@ -301,16 +346,17 @@ export default function SellerApplyPage() {
               ['Products', form.plannedProducts.filter((p) => p.name).map((p) => p.name).join(', ')], ['Documents', `${docsDone} of ${DOCS.length} added`]].map(([k, v]) => <tr key={k}><th>{k}</th><td>{v}</td></tr>)}
           </tbody></table></div>
           {docsDone < DOCS.length && <p className="ac-warn">Some documents are missing. You can still submit, but we will ask you for them.</p>}
-          <label className="ac-check" style={{ marginTop: 16 }}><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+          <label className="ac-check" id="agree-box" style={{ marginTop: 16 }}><input type="checkbox" checked={agree} onChange={(e) => { setAgree(e.target.checked); if (e.target.checked) setSubmitNote(''); }} />
             <span>I confirm these details are correct, and I agree that my documents are read automatically and reviewed by AutoCart staff. We keep only the last 4 digits of your Aadhaar.</span></label>
         </div>
       )}
 
-      <div className="ac-row-between" style={{ marginTop: 24 }}>
+      {submitNote && step === 4 && <div className="ac-warn" role="alert" style={{ marginTop: 14 }}>{submitNote}</div>}
+      <div className="ac-row-between" style={{ marginTop: 24, paddingBottom: 40 }}>
         <button className="ac-btn ac-btn-outline" disabled={step === 0 || !!busy} onClick={() => setStep(step - 1)}>Back</button>
         {step < 4
           ? <button className="ac-btn ac-btn-blue" disabled={!!busy || (step === 3 && !app)} onClick={next}>{busy === 'save' ? 'Saving…' : step === 2 ? 'Save and continue' : 'Continue'}</button>
-          : <button className="ac-btn ac-btn-blue" disabled={!agree || !!busy || !app} onClick={submit}>{busy === 'submit' ? 'Submitting…' : <><Check size={18} /> Submit application</>}</button>}
+          : <button className="ac-btn ac-btn-blue" disabled={!!busy || !app} onClick={submit}>{busy === 'submit' ? 'Submitting…' : <><Check size={18} /> Submit application</>}</button>}
       </div>
     </div></div>
   );

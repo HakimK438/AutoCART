@@ -25,6 +25,7 @@ EXAMPLES = [
     'What is my revenue so far?',
     'Which products have the best ratings?',
     'Are any customer questions waiting?',
+    'What is my profit?',
 ]
 
 
@@ -77,6 +78,16 @@ def answer(company, message):
             return {'answer': 'No orders contain your products yet, so there is no sales ranking to show.', 'columns': [], 'rows': []}
         return {'answer': f'{ranked[0].name} is your best seller with {units[ranked[0].id]} unit(s) sold.',
                 'columns': ['Product', 'Units sold', 'Revenue'], 'rows': [[p.name, units[p.id], f'₹{money[p.id]:,.0f}'] for p in ranked[:8]]}
+    if _has(text, 'profit', 'margin', 'make money', 'made money'):
+        a = analytics(products)
+        e, pr = a['earnings'], a['profit']
+        if pr['costKnown']:
+            msg = f"Profit so far is ₹{pr['amount']:,.0f}: sales minus AutoCart commission minus what your products cost you."
+            if pr['productsWithoutCost']:
+                msg += f" This leaves out {len(pr['productsWithoutCost'])} product(s) where you have not entered a cost price."
+        else:
+            msg = f"After AutoCart's commission you keep ₹{e['youKeep']:,.0f} from ₹{e['gross']:,.0f} of sales. To see true profit, enter what each product costs you in the Your products list (Cost price)."
+        return {'answer': msg, 'columns': ['Sold', 'Commission', 'You keep'], 'rows': [[f"₹{e['gross']:,.0f}", f"₹{e['commission']:,.0f}", f"₹{e['youKeep']:,.0f}"]]}
     if _has(text, 'revenue', 'earn', 'income', 'sales so far'):
         total = sum(money.values())
         return {'answer': f'₹{total:,.0f} from {sum(units.values())} unit(s) across {len(orders)} order(s). This is the item total, before delivery fees and payment charges.', 'columns': [], 'rows': []}
@@ -112,7 +123,7 @@ def _facts(company, products):
         'shop': company,
         'products': [{'name': p.name, 'category': p.category, 'price': p.price, 'stock': p.stock, 'rating': p.rating, 'reviews': p.reviewCount} for p in products[:40]],
         'last30DaysRevenue': sum(d['revenue'] for d in a['salesByDay']), 'last7DaysRevenue': sum(d['revenue'] for d in last7),
-        'topProducts': a['topProducts'], 'categoryMix': a['categoryMix'], 'earnings': a['earnings'],
+        'topProducts': a['topProducts'], 'categoryMix': a['categoryMix'], 'earnings': a['earnings'], 'profit': a['profit'],
         'openQuestions': Enquiry.objects.filter(sellerName=company, status='OPEN').count(),
     }
 

@@ -37,7 +37,7 @@ const DealOfDay = ({ p, tone }) => {
             <p>left. A new deal starts at midnight.</p>
           </div>
           <div className="ac-row" style={{ marginTop: 22 }}>
-            <button className="ac-btn ac-btn-blue" onClick={() => { addToCart(p, 1); navigate('/checkout'); }}>Buy now</button>
+            <button className="ac-btn ac-btn-blue" onClick={() => { if (addToCart(p, 1, { buyNow: true }) !== false) navigate('/checkout'); }}>Buy now</button>
             <Link to={`/products/${p.id}`} className="ac-btn ac-btn-white">See details</Link>
           </div>
           {p.stock <= 20 && <p className="ac-dod-low">Only {p.stock} left at this price.</p>}
@@ -79,7 +79,7 @@ const Spotlight = ({ p, tone, flip }) => {
           {save > 0 && <span className="ac-spot-save">Save {money(save)}</span>}
         </div>
         <div className="ac-spot-cta">
-          <button className="ac-btn ac-btn-blue" onClick={() => { addToCart(p, 1); navigate('/checkout'); }}>Buy now</button>
+          <button className="ac-btn ac-btn-blue" onClick={() => { if (addToCart(p, 1, { buyNow: true }) !== false) navigate('/checkout'); }}>Buy now</button>
           <button className="ac-btn ac-btn-outline" onClick={add} data-added={added}>{added ? 'Added to cart' : 'Add to cart'}</button>
         </div>
       </div>

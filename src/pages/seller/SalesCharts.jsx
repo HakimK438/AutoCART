@@ -33,8 +33,8 @@ export default function SalesCharts({ data }) {
               <AreaChart data={days} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <defs><linearGradient id="rev" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={BRAND} stopOpacity={0.35} /><stop offset="100%" stopColor={BRAND} stopOpacity={0.02} /></linearGradient></defs>
                 <CartesianGrid stroke="#f0e4d8" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 12 }} interval={4} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 12 }} width={56} tickLine={false} axisLine={false} tickFormatter={(v) => (v >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${v}`)} />
+                <XAxis dataKey="label" tick={{ fontSize: 14 }} interval={4} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fontSize: 14 }} width={56} tickLine={false} axisLine={false} tickFormatter={(v) => (v >= 1000 ? `₹${Math.round(v / 1000)}k` : `₹${v}`)} />
                 <Tooltip formatter={(v) => [inr(v), 'Revenue']} />
                 <Area type="monotone" dataKey="revenue" stroke={BRAND} strokeWidth={2.5} fill="url(#rev)" animationDuration={700} />
               </AreaChart>
@@ -49,7 +49,7 @@ export default function SalesCharts({ data }) {
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={top} layout="vertical" margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
                   <XAxis type="number" hide />
-                  <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 12 }} tickLine={false} axisLine={false} tickFormatter={(n) => (n.length > 18 ? `${n.slice(0, 17)}…` : n)} />
+                  <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 14 }} tickLine={false} axisLine={false} tickFormatter={(n) => (n.length > 18 ? `${n.slice(0, 17)}…` : n)} />
                   <Tooltip formatter={(v) => [inr(v), 'Revenue']} />
                   <Bar dataKey="revenue" fill={BRAND} radius={[0, 8, 8, 0]} animationDuration={700} />
                 </BarChart>
@@ -62,9 +62,10 @@ export default function SalesCharts({ data }) {
       <div className="ac-earn" role="group" aria-label="What you keep after commission">
         <div><small>Sold (item total)</small><b>{inr(e.gross)}</b></div>
         <div><small>AutoCart commission</small><b>− {inr(e.commission)}</b><em>{e.gross ? `${Math.round((e.commission / e.gross) * 100)}% overall` : ''}</em></div>
+        {data.profit?.costKnown && <div><small>Profit (after your costs)</small><b>{inr(data.profit.amount)}</b><em>{data.profit.productsWithoutCost?.length ? `${data.profit.productsWithoutCost.length} product(s) have no cost price yet` : 'all products counted'}</em></div>}
         <div data-key="1"><small>You keep</small><b>{inr(e.youKeep)}</b><em>before delivery and online payment charges</em></div>
       </div>
-      {mix.length > 0 && <p className="ac-muted" style={{ fontSize: 13, marginTop: 10 }}>Commission by category: {mix.map((m) => `${m.category} ${m.commissionPercent}%`).join(' · ')}.</p>}
+      {mix.length > 0 && <p className="ac-muted" style={{ fontSize: 14, marginTop: 10 }}>Commission by category: {mix.map((m) => `${m.category} ${m.commissionPercent}%`).join(' · ')}.</p>}
     </section>
   );
 }

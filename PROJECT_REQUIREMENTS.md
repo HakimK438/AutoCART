@@ -371,7 +371,7 @@ The code already has the hard part: 67 Mumbai stores with live stock, distance-b
 
 ## AI agents by role: requirements and honest status (updated)
 
-Goal: a customer, seller and admin experience that is useful in real life, using free tools only (Groq/Gemini free tiers with a rule-based fallback, local OCR, OpenStreetMap, Razorpay TEST mode only).
+Goal: a customer, seller and admin experience that is useful in real life, using free tools only (Groq/Gemini free tiers with a rule-based fallback, local OCR, OpenStreetMap; no payment gateway: pay on delivery, at the store, or UPI straight to the seller).
 
 Rules for every agent: answer only from data in our database; never invent products, prices, reviews or stock; say "I don't know" and offer a human; show why a suggestion was made; no personal documents sent to any LLM.
 
@@ -391,7 +391,7 @@ Rules for every agent: answer only from data in our database; never invent produ
 
 Visibility rules (built and browser-tested): customers never see admin or seller links or data; sellers see only their own products and order share; admin tools live behind /admin/login, seller tools behind /seller/login.
 
-Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products have wrong photos or an absurd price in seed data; real Razorpay test checkout and Gmail sending need your own keys in .env; legal pages missing.
+Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products have wrong photos or an absurd price in seed data; real Gmail sending needs your own app password in .env; legal pages missing.
 
 ### Assistants and seller business model (updated)
 
@@ -400,3 +400,9 @@ Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products 
 - The old "Advanced assistant" drawer was removed from the chat.
 - **Seller dashboard**: revenue-per-day chart, best sellers chart, and an earnings breakdown (item total, commission, what the seller keeps), each with a plain-language headline.
 - **Business model** (`backend/api/commission.py`, public at `/api/commission`): free to join, list and no monthly fee; commission only on a sale, by category (Electronics 5%, Fashion 10%, Home & Kitchen 8%, Beauty 8%, Sports 7%, Books 4%, Grocery 3%, Toys 7%, default 6%); online payments add the payment provider charge (about 2%) at cost. These are proposed launch rates modelled on how large Indian marketplaces charge referral fees, not a signed price list or exact copies of any company's rates.
+
+### Agent architecture, orders and admin risk (updated)
+- **Saathi** is a LangGraph state graph (`backend/api/agent_graph.py`): classify → retrieve (BGE-small embeddings over products and policy passages, run locally) → answer (Gemini, grounded on retrieved facts only) or buy (opens an in-chat confirm step). Fallbacks: template reply, keyword search.
+- **Order flow**: customer shares location at checkout → seller sees "Orders to pack" → one click "Confirm & pack" → route map (OSRM road route, store to customer) for seller and customer.
+- **Admin dashboard**: "New sellers waiting" with risk score and the specific checks that failed; admin approves or rejects with the audit trail.
+- **Sign-in**: three separate pages (customer, seller, admin) linked by a tab bar. Seller sign-up requires the document upload step (masked Aadhaar, PAN).

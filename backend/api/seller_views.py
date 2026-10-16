@@ -180,7 +180,8 @@ def seller_applications_view(request):
         'pincode': str(data['pincode']).strip(), 'storeLatitude': float(data['storeLatitude']),
         'storeLongitude': float(data['storeLongitude']), 'productCategories': data.get('productCategories') or [],
         'plannedProducts': [
-            {'name': str(p.get('name')).strip(), 'category': str(p.get('category') or '').strip(), 'approxPrice': p.get('approxPrice') or 0}
+            {'name': str(p.get('name')).strip(), 'category': str(p.get('category') or '').strip(), 'approxPrice': p.get('approxPrice') or 0,
+             'stock': max(0, int(p.get('stock') or 0)) if str(p.get('stock') or '0').isdigit() else 0, 'image': str(p.get('image') or '')[:500]}
             for p in data.get('plannedProducts', []) if str(p.get('name', '')).strip()
         ],
     }
@@ -196,6 +197,22 @@ def seller_applications_view(request):
 
     app = SellerApplication.objects.create(id=f"app-{uuid.uuid4().hex[:8]}", ownerUserId=user.id, status='DRAFT', **fields)
     _audit(app, '', 'DRAFT', 'APPLICATION_STARTED', user.email, 'Seller started an application.')
+    return Response(_profile(app, user), status=http.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def seller_application_start_view(request):
+    """Someone created a seller account: open a draft application straight away so the admin can see the sign-up and the seller can resume."""
+    user, err = _require(request)
+    if err:
+        return err
+    existing = SellerApplication.objects.filter(ownerUserId=user.id).exclude(status__in=FINAL_STATES).first()
+    if existing:
+        return Response(_profile(existing, user))
+    app = SellerApplication.objects.create(id=f"app-{uuid.uuid4().hex[:8]}", ownerUserId=user.id, status='DRAFT', applicantName=user.name, email=user.email.lower(),
+                                           phone=user.phone or '', companyName=f"{user.name} (store not named yet)", city='Mumbai')
+    _audit(app, '', 'DRAFT', 'SELLER_ACCOUNT_CREATED', user.email, 'Created a seller account. Application not submitted yet.')
     return Response(_profile(app, user), status=http.HTTP_201_CREATED)
 
 
@@ -330,6 +347,20 @@ def _activate_seller(app, admin_email):
                   'city': app.city or 'Mumbai', 'state': app.addressState, 'pincode': app.pincode, 'latitude': lat, 'longitude': lng,
                   'phone': app.phone, 'email': app.email, 'operatingStatus': 'Open', 'fulfillmentCapability': 'Pickup and Delivery'},
     )
+    # The products the seller listed while applying go live with the stock and photo they gave, so the dashboard starts full.
+    from django.utils.text import slugify
+    for item in app.plannedProducts or []:
+        price = float(item.get('approxPrice') or 0)
+        name = str(item.get('name') or '').strip()
+        if not name or price <= 0 or Product.objects.filter(seller=app.companyName, name=name).exists():
+            continue
+        pid = f"prod-{uuid.uuid4().hex[:8]}"
+        stock = int(item.get('stock') or 0)
+        Product.objects.create(
+            id=pid, name=name, slug=f"{slugify(name)[:200]}-{pid[-4:]}", category=item.get('category') or (app.productCategories or ['Home & Kitchen'])[0],
+            price=price, originalPrice=0, discount=0, stock=stock, stockStatus='Out of Stock' if stock <= 0 else ('Low Stock' if stock <= 10 else 'In Stock'),
+            images=[item['image']] if item.get('image') else [], seller=app.companyName, createdAt=today, newArrival=True)
+    Seller.objects.filter(id=seller.id).update(productsCount=Product.objects.filter(seller=app.companyName).count())
     owner = User.objects.filter(id=app.ownerUserId).first()
     if owner and owner.role == 'CUSTOMER':
         owner.role = 'SELLER'
@@ -361,6 +392,14 @@ def admin_seller_application_action_view(request, pk):
         return Response({'detail': 'Write a reason. The applicant will see it.', 'errors': {'reason': 'Required'}},
                         status=http.HTTP_400_BAD_REQUEST)
 
+    if action == 'APPROVE':  # never go live without the identity documents and a store location
+        have = set(app.documents.values_list('docType', flat=True))
+        gaps = [name for key, name in (('AADHAAR', 'Aadhaar'), ('PAN', 'PAN card')) if key not in have]
+        if app.storeLatitude is None or app.storeLongitude is None:
+            gaps.append('a store location on the map')
+        if gaps:
+            return Response({'detail': f"Cannot approve yet. Missing: {', '.join(gaps)}. Ask the seller for them."}, status=http.HTTP_400_BAD_REQUEST)
+
     previous = app.status
     app.status = new_status
     if action == 'APPROVE':
@@ -378,3 +417,51 @@ def admin_seller_application_action_view(request, pk):
     _audit(app, previous, new_status, action, user.email, reason)
     return Response({'success': True, 'applicationId': app.id, 'previousStatus': previous, 'currentStatus': new_status,
                      'profile': _profile(app, user)})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_seller_detail_view(request, seller_id):
+    """One seller in full for the admin: contact, live numbers worked out from real orders, and the onboarding application with its documents."""
+    from .models import Order
+    from .seller_analytics import analytics
+    user, err = _require(request, ADMIN_ROLES)
+    if err:
+        return err
+    seller = Seller.objects.filter(id=seller_id).first()
+    if not seller:
+        return Response({'detail': 'Seller not found.'}, status=http.HTTP_404_NOT_FOUND)
+    app = SellerApplication.objects.filter(sellerId=seller.id).first() or SellerApplication.objects.filter(companyName=seller.companyName or seller.name).first()
+    products = list(Product.objects.filter(seller__in=[x for x in (seller.companyName, seller.name) if x]))
+    ids = {p.id for p in products}
+    orders = [o for o in Order.objects.exclude(status='Cancelled') if any(str(i.get('id')) in ids for i in (o.items or []))]
+    earn = analytics(products)['earnings'] if products else {'gross': 0, 'commission': 0, 'youKeep': 0}
+    return Response({
+        'seller': {'id': seller.id, 'name': seller.name, 'companyName': seller.companyName, 'email': seller.email, 'phone': seller.phone,
+                   'city': seller.city, 'status': seller.status, 'joinedDate': seller.joinedDate, 'rating': seller.rating},
+        'live': {'products': len(products), 'orders': len(orders), 'revenue': earn['gross'], 'commission': earn['commission'],
+                 'lowStock': sum(1 for p in products if 0 < p.stock <= 10), 'outOfStock': sum(1 for p in products if p.stock <= 0)},
+        'products': [{'id': p.id, 'name': p.name, 'price': p.price, 'stock': p.stock} for p in products[:12]],
+        'application': _profile(app, user) if app else None,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@parser_classes([MultiPartParser, FormParser])
+def seller_application_product_image_view(request, pk):
+    """An applicant uploads a photo for one of their planned products. Returns the public URL to store on the product."""
+    from .product_images import save_photo
+    user, err = _require(request)
+    if err:
+        return err
+    app = _load(pk)
+    if not app or not _owns(user, app):
+        return Response({'detail': 'Application not found.'}, status=http.HTTP_404_NOT_FOUND)
+    photo = request.FILES.get('image')
+    if not photo:
+        return Response({'detail': 'Choose a photo first.'}, status=http.HTTP_400_BAD_REQUEST)
+    url, problem = save_photo(photo, request)
+    if problem:
+        return Response({'detail': problem}, status=http.HTTP_400_BAD_REQUEST)
+    return Response({'url': url})

@@ -1,15 +1,10 @@
-"""Orders and Razorpay (test mode): the server decides prices and payment status, and orders stay private."""
-
-import os
-from unittest.mock import patch
+"""Orders and payments: the server decides prices and payment status, and orders stay private. No payment gateway is used."""
 
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from api.models import Coupon, Order, Payment, Product, Store, User
+from api.models import Coupon, Order, Payment, Product, SellerApplication, Store, User
 from api.views import generate_token
-
-NO_KEYS = {'RAZORPAY_KEY_ID': '', 'RAZORPAY_KEY_SECRET': ''}
 
 
 def authed(user):
@@ -66,9 +61,10 @@ class OrderTests(TestCase):
     def test_payment_status_is_never_paid_by_default(self):
         cod = self.place(items=[{'id': 'p2', 'quantity': 1}]).json()
         self.assertEqual((cod['paymentStatus'], cod['status']), ('Pending', 'Confirmed'))
-        online = self.place(items=[{'id': 'p2', 'quantity': 1}], paymentMethod='Razorpay (Test Mode)').json()
-        self.assertEqual((online['paymentStatus'], online['status'], online['paymentRequired']), ('Awaiting Payment', 'Pending', True))
-        self.assertEqual(self.place(paymentMethod='UPI').status_code, 400)  # the old "UPI/Card = instantly Paid" is gone
+        pod = self.place(items=[{'id': 'p2', 'quantity': 1}], paymentMethod='UPI or Card on Delivery').json()
+        self.assertEqual((pod['paymentStatus'], pod['status'], pod['paymentRequired']), ('Pending', 'Confirmed', False))
+        self.assertEqual(self.place(paymentMethod='UPI').status_code, 400)  # unknown methods are refused
+        self.assertEqual(self.place(paymentMethod='Razorpay (Test Mode)').status_code, 400)  # the gateway is gone
 
     def test_pay_at_store_needs_a_store(self):
         self.assertEqual(self.place(paymentMethod='Pay at Store').status_code, 400)
@@ -109,106 +105,85 @@ class OrderTests(TestCase):
         self.assertEqual(self.a.post(f'/api/orders/{oid}/return').status_code, 200)
 
 
-@patch.dict(os.environ, NO_KEYS)
-class RazorpayTests(TestCase):
+class UpiScanAndPayTests(TestCase):
+    """Customer pays the seller's own UPI ID; the seller confirms the money arrived."""
+
     def setUp(self):
-        self.alice = User.objects.create_user(email='alice@example.com', name='Alice', password='pw-12345')
-        self.bob = User.objects.create_user(email='bob@example.com', name='Bob', password='pw-12345')
-        self.a, self.b = authed(self.alice), authed(self.bob)
-        Product.objects.create(id='p1', name='Mouse', slug='mouse', category='Electronics', price=1000, stock=5)
-        self.oid = self.a.post('/api/orders', {'items': [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'Razorpay (Test Mode)',
-                                               'shippingAddress': {'fullName': 'Alice'}}, format='json').json()['id']
+        self.cust = User.objects.create_user(email='c@example.com', name='Cathy', password='pw-12345')
+        self.other = User.objects.create_user(email='o@example.com', name='Omar', password='pw-12345')
+        self.seller = User.objects.create_user(email='s@example.com', name='Sita', password='pw-12345', role='SELLER')
+        self.rival = User.objects.create_user(email='r@example.com', name='Ravi', password='pw-12345', role='SELLER')
+        self.admin = User.objects.create_user(email='a@example.com', name='Boss', password='pw-12345', role='ADMIN')
+        SellerApplication.objects.create(id='app-s', ownerUserId=self.seller.id, applicantName='Sita', companyName='Sita Stores', email='s@example.com', phone='9820012345', status='APPROVED')
+        SellerApplication.objects.create(id='app-r', ownerUserId=self.rival.id, applicantName='Ravi', companyName='Ravi Mart', email='r@example.com', phone='9820012346', status='APPROVED')
+        Product.objects.create(id='p1', name='Flask', slug='flask', category='Home', price=500, stock=10, seller='Sita Stores')
+        Product.objects.create(id='p2', name='Lamp', slug='lamp', category='Home', price=900, stock=10, seller='Ravi Mart')
+        self.c, self.o, self.s, self.r, self.boss, self.guest = authed(self.cust), authed(self.other), authed(self.seller), authed(self.rival), authed(self.admin), APIClient()
 
-    def start(self, client=None):
-        return (client or self.a).post('/api/payments/razorpay/order', {'orderId': self.oid}, format='json')
+    def order(self, items=None):
+        return self.c.post('/api/orders', {'items': items or [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'UPI (Scan & Pay)',
+                                           'shippingAddress': {'fullName': 'Cathy', 'phone': '9820012345', 'addressLine': '1 Road', 'city': 'Mumbai'}}, format='json')
 
-    def test_config_reports_demo_mode_without_keys_and_never_a_secret(self):
-        cfg = APIClient().get('/api/payments/config').json()
-        self.assertEqual((cfg['mode'], cfg['keyId']), ('demo', ''))
+    def test_upi_needs_a_seller_upi_id_and_a_single_seller(self):
+        r = self.order()
+        self.assertEqual(r.status_code, 400)  # Sita has not added a UPI ID
+        self.assertIn('UPI ID', r.json()['detail'])
+        self.assertEqual(Order.objects.count(), 0)
+        self.s.put('/api/seller/payout-settings', {'upiId': 'sita@okaxis'}, format='json')
+        mixed = self.order([{'id': 'p1', 'quantity': 1}, {'id': 'p2', 'quantity': 1}])
+        self.assertEqual(mixed.status_code, 400)
+        self.assertIn('one seller', mixed.json()['detail'])
+        self.assertEqual(Product.objects.get(id='p1').stock, 10)  # nothing was taken
 
-    def test_amount_comes_from_the_stored_order(self):
-        res = self.a.post('/api/payments/razorpay/order', {'orderId': self.oid, 'amount': 1}, format='json').json()
-        self.assertEqual((res['amount'], res['currency'], res['demo']), (100000, 'INR', True))  # 1000 rupees in paise
+    def test_bad_upi_id_is_refused_and_buyers_cannot_set_one(self):
+        self.assertEqual(self.s.put('/api/seller/payout-settings', {'upiId': 'not valid'}, format='json').status_code, 400)
+        self.assertEqual(self.c.put('/api/seller/payout-settings', {'upiId': 'x@okaxis'}, format='json').status_code, 403)
 
-    def test_demo_payment_succeeds_and_marks_the_order_paid(self):
-        pay = self.start().json()
-        sig = self.a.post('/api/payments/razorpay/demo-sign', {'orderId': self.oid, 'razorpayOrderId': pay['razorpayOrderId'], 'outcome': 'success'}, format='json').json()
-        done = self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json')
-        self.assertEqual(done.status_code, 200, done.content)
-        o = Order.objects.get(id=self.oid)
-        self.assertEqual((o.paymentStatus, o.status), ('Paid', 'Confirmed'))
-        self.assertEqual(Payment.objects.get(orderId=self.oid).status, 'PAID')
+    def test_full_flow_pay_submit_reference_seller_confirms(self):
+        self.s.put('/api/seller/payout-settings', {'upiId': 'sita@okaxis'}, format='json')
+        o = self.order().json()
+        self.assertEqual((o['paymentStatus'], o['status'], o['paymentRequired']), ('Awaiting Payment', 'Pending', True))
+        self.assertIn('pa=sita%40okaxis', o['upi']['link'])
+        oid = o['id']
+        self.assertEqual(self.o.get(f'/api/orders/{oid}/upi').status_code, 404)  # someone else's order
+        self.assertEqual(self.c.get(f'/api/orders/{oid}/upi').json()['amount'], o['totalAmount'])
+        self.assertEqual(self.s.post(f'/api/orders/{oid}/payment', {'action': 'received'}, format='json').status_code, 400)  # nothing submitted yet
+        self.assertEqual(self.c.post(f'/api/orders/{oid}/upi-reference', {'utr': '12345'}, format='json').status_code, 400)
+        self.assertEqual(self.c.post(f'/api/orders/{oid}/upi-reference', {'utr': '123456789012'}, format='json').json()['paymentStatus'], 'Verifying')
+        self.assertEqual(self.c.post(f'/api/orders/{oid}/payment', {'action': 'received'}, format='json').status_code, 403)  # the buyer cannot confirm their own payment
+        self.assertEqual(self.r.post(f'/api/orders/{oid}/payment', {'action': 'received'}, format='json').status_code, 403)  # a different seller cannot
+        done = self.s.post(f'/api/orders/{oid}/payment', {'action': 'received'}, format='json').json()
+        self.assertEqual((done['paymentStatus'], done['status']), ('Paid', 'Confirmed'))
 
-    def test_a_forged_signature_is_rejected(self):
-        pay = self.start().json()
-        res = self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, 'razorpay_order_id': pay['razorpayOrderId'],
-                                                           'razorpay_payment_id': 'pay_fake', 'razorpay_signature': 'deadbeef'}, format='json')
-        self.assertEqual(res.status_code, 400)
-        o = Order.objects.get(id=self.oid)
-        self.assertEqual(o.paymentStatus, 'Failed')
-        self.assertEqual(self.start().status_code, 200)  # the customer can try again
+    def test_reference_cannot_be_reused_and_a_rejected_payment_can_be_retried(self):
+        self.s.put('/api/seller/payout-settings', {'upiId': 'sita@okaxis'}, format='json')
+        one, two = self.order().json()['id'], self.order().json()['id']
+        self.c.post(f'/api/orders/{one}/upi-reference', {'utr': '123456789012'}, format='json')
+        self.assertEqual(self.c.post(f'/api/orders/{two}/upi-reference', {'utr': '123456789012'}, format='json').status_code, 409)
+        self.s.post(f'/api/orders/{one}/payment', {'action': 'not_received'}, format='json')
+        self.assertEqual(Order.objects.get(id=one).paymentStatus, 'Failed')
+        self.assertEqual(self.c.post(f'/api/orders/{one}/upi-reference', {'utr': '999999999999'}, format='json').status_code, 200)  # try again with the right number
 
-    def test_a_declined_test_payment_stays_unpaid(self):
-        pay = self.start().json()
-        res = self.a.post('/api/payments/razorpay/demo-sign', {'orderId': self.oid, 'razorpayOrderId': pay['razorpayOrderId'], 'outcome': 'failure'}, format='json')
-        self.assertEqual(res.status_code, 402)
-        self.assertNotEqual(Order.objects.get(id=self.oid).paymentStatus, 'Paid')
+    def test_seller_cannot_pack_until_paid_and_admin_sees_waiting_payments(self):
+        self.s.put('/api/seller/payout-settings', {'upiId': 'sita@okaxis'}, format='json')
+        oid = self.order().json()['id']
+        self.assertEqual(self.s.post(f'/api/seller/orders/{oid}/pack').status_code, 400)
+        self.c.post(f'/api/orders/{oid}/upi-reference', {'utr': '123456789012'}, format='json')
+        waiting = self.boss.get('/api/payments/status').json()['waiting']
+        self.assertEqual((waiting[0]['orderId'], waiting[0]['utr'], waiting[0]['seller']), (oid, '123456789012', 'Sita Stores'))
+        self.assertEqual(self.c.get('/api/payments/status').status_code, 403)
+        self.s.post(f'/api/orders/{oid}/payment', {'action': 'received'}, format='json')
+        self.assertEqual(self.s.post(f'/api/seller/orders/{oid}/pack').json()['status'], 'Packed')
 
-    def test_someone_else_cannot_pay_or_verify_my_order(self):
-        self.assertEqual(self.start(self.b).status_code, 404)
-        self.assertEqual(self.start(APIClient()).status_code, 401)
-        pay = self.start().json()
-        sig = self.a.post('/api/payments/razorpay/demo-sign', {'orderId': self.oid, 'razorpayOrderId': pay['razorpayOrderId'], 'outcome': 'success'}, format='json').json()
-        self.assertEqual(self.b.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json').status_code, 404)
-
-    def test_a_signature_cannot_be_used_twice(self):
-        pay = self.start().json()
-        sig = self.a.post('/api/payments/razorpay/demo-sign', {'orderId': self.oid, 'razorpayOrderId': pay['razorpayOrderId'], 'outcome': 'success'}, format='json').json()
-        self.assertEqual(self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json').status_code, 200)
-        self.assertEqual(self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json').status_code, 400)
-
-    def test_cash_orders_do_not_need_online_payment(self):
-        cod = self.a.post('/api/orders', {'items': [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'Cash on Delivery'}, format='json').json()['id']
-        self.assertEqual(self.a.post('/api/payments/razorpay/order', {'orderId': cod}, format='json').status_code, 400)
-
-    def test_live_keys_are_refused(self):
-        with patch.dict(os.environ, {'RAZORPAY_KEY_ID': 'rzp_live_abc', 'RAZORPAY_KEY_SECRET': 'secret'}):
-            self.assertEqual(self.start().status_code, 503)
-
-
-class PaymentStatusTests(TestCase):
-    def setUp(self):
-        self.admin = authed(User.objects.create_user(email='boss@example.com', name='Boss', password='pw-12345', role='ADMIN'))
-        self.customer = authed(User.objects.create_user(email='c@example.com', name='C', password='pw-12345'))
-
-    def test_admin_only(self):
-        self.assertEqual(APIClient().get('/api/payments/status').status_code, 403)
-        self.assertEqual(self.customer.get('/api/payments/status').status_code, 403)
-
-    @patch.dict(os.environ, NO_KEYS)
-    def test_demo_mode_without_keys(self):
-        d = self.admin.get('/api/payments/status').json()
-        self.assertEqual((d['mode'], d['connection']), ('demo', None))
-
-    def test_connection_check_with_test_keys_and_the_secret_is_never_returned(self):
-        class Ok:
-            status_code = 200
-        with patch.dict(os.environ, {'RAZORPAY_KEY_ID': 'rzp_test_ABCDEFGH1234', 'RAZORPAY_KEY_SECRET': 'topsecretvalue'}), \
-                patch('api.order_views.requests.get', return_value=Ok()):
-            res = self.admin.get('/api/payments/status')
-        d = res.json()
-        self.assertEqual((d['mode'], d['connection']['ok']), ('test', True))
-        self.assertNotIn('topsecretvalue', res.content.decode())
-        self.assertNotIn('ABCDEFGH1234'[:-4], res.content.decode().replace('rzp_test_...', ''))
-
-    def test_rejected_keys_are_reported(self):
-        class No:
-            status_code = 401
-        with patch.dict(os.environ, {'RAZORPAY_KEY_ID': 'rzp_test_ABCDEFGH1234', 'RAZORPAY_KEY_SECRET': 'x'}), patch('api.order_views.requests.get', return_value=No()):
-            self.assertFalse(self.admin.get('/api/payments/status').json()['connection']['ok'])
-
-    def test_live_keys_are_blocked_and_never_contacted(self):
-        with patch.dict(os.environ, {'RAZORPAY_KEY_ID': 'rzp_live_ABCDEFGH1234', 'RAZORPAY_KEY_SECRET': 'x'}), patch('api.order_views.requests.get') as get:
-            d = self.admin.get('/api/payments/status').json()
-        self.assertEqual((d['mode'], d['liveKeyBlocked']), ('blocked', True))
-        get.assert_not_called()
+    def test_checkout_knows_when_upi_cannot_work(self):
+        c = APIClient()
+        empty = c.post('/api/payments/upi-check', {'items': []}, format='json').json()
+        self.assertEqual(empty['available'], False)
+        no_upi = c.post('/api/payments/upi-check', {'items': [{'id': 'p1'}]}, format='json').json()
+        self.assertEqual(no_upi['available'], False)
+        self.assertIn('UPI ID', no_upi['reason'])
+        self.s.put('/api/seller/payout-settings', {'upiId': 'sita@okaxis'}, format='json')
+        yes = c.post('/api/payments/upi-check', {'items': [{'id': 'p1'}]}, format='json').json()
+        self.assertEqual((yes['available'], yes['payee']), (True, 'Sita Stores'))
+        mixed = c.post('/api/payments/upi-check', {'items': [{'id': 'p1'}, {'id': 'p2'}]}, format='json').json()
+        self.assertEqual(mixed['available'], False)

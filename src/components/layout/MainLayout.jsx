@@ -1,3 +1,4 @@
+import BuyGate from '../../storefront/BuyGate';
 import React, { useEffect, useState } from 'react';
 import { useLocation as useRoute } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
@@ -39,6 +40,7 @@ export const MainLayout = ({ children }) => {
       <div className="ac ac-host"><StoreFooter /></div>
 
       <div className="ac ac-host">
+        <BuyGate />
         <button className="ac-chat" onClick={() => setChatOpen(true)} aria-label="Open Saathi, the AutoCart shopping assistant">
           <Sparkles size={20} /><span>Ask Saathi</span>
         </button>

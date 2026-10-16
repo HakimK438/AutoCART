@@ -94,7 +94,7 @@ export default function Reviews({ productId, signedIn }) {
         {data.reviews.map((r) => (
           <article key={r.id} className="ac-rev">
             <div className="ac-row-between"><div className="ac-row" style={{ gap: 10 }}><span className="ac-avatar-sm" aria-hidden="true">{r.name[0]}</span><b>{r.name}</b>
-              {r.verified && <span className="ac-chip-status" data-tone="ok"><BadgeCheck size={13} />&nbsp;Verified buyer</span>}</div><span className="ac-muted" style={{ fontSize: 13 }}>{day(r.createdAt)}</span></div>
+              {r.verified && <span className="ac-chip-status" data-tone="ok"><BadgeCheck size={13} />&nbsp;Verified buyer</span>}</div><span className="ac-muted" style={{ fontSize: 14 }}>{day(r.createdAt)}</span></div>
             <div style={{ margin: '10px 0 4px' }}><Stars value={r.rating} /></div>
             {r.title && <b style={{ display: 'block', marginBottom: 4 }}>{r.title}</b>}
             <p style={{ margin: 0, lineHeight: 1.65, whiteSpace: 'pre-wrap' }}>{r.body}</p>

@@ -114,7 +114,7 @@ export default function Catalog() {
   const shownBrands = brandList.filter(([b]) => b.toLowerCase().includes(brandQ.toLowerCase()));
 
   return (
-    <div className="ac ac-page"><div className="ac-wrap">
+    <div className="ac ac-page ac-shop-page"><div className="ac-wrap">
       <nav className="ac-crumbs" aria-label="Breadcrumb"><Link to="/">Home</Link><span>/</span><span>Shop</span>{category && <><span>/</span><span>{category}</span></>}</nav>
       <div className="ac-shophead">
         <div>

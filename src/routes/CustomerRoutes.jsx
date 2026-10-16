@@ -53,7 +53,7 @@ export const CustomerRoutes = () => {
         <Route
           path="/checkout"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute roles={['CUSTOMER']}>
               <Checkout />
             </ProtectedRoute>
           }

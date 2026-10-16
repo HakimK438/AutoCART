@@ -6,6 +6,9 @@ import { useAuth } from '../../hooks/useAuth';
 import { BrandLink } from '../../storefront/Brand';
 import SalesCharts from './SalesCharts';
 import HowItWorks from './HowItWorks';
+import SellerOrders from './SellerOrders';
+import PayoutSettings from './PayoutSettings';
+import SellerProducts from './SellerProducts';
 import AddProduct from './AddProduct';
 import SellerAssistant from './SellerAssistant';
 import EnquiryInbox from '../../storefront/EnquiryInbox';
@@ -85,45 +88,17 @@ export default function SellerCenter() {
             <SellerAssistant />
             <AddProduct onAdded={load} />
 
-            <section id="products" className="ac-box" aria-labelledby="prod-h" style={{ marginTop: 24 }}>
-              <div className="ac-row-between"><h2 id="prod-h">Your products</h2>{saved && <span className="ac-chip-status" data-tone="ok" role="status"><Check size={13} />&nbsp;{saved}</span>}</div>
-              <div className="ac-scroll-x">
-                <table className="ac-table">
-                  <thead><tr><th>Product</th><th>Price (₹)</th><th>Stock</th><th>Rating</th><th /></tr></thead>
-                  <tbody>{data.products.map((p) => {
-                    const e = edits[p.id] || {};
-                    return (
-                      <tr key={p.id}>
-                        <td><Link to={`/products/${p.id}`} className="ac-prodcell">{p.image && <img src={sized(p.image, 80)} alt="" />}<span>{p.name}</span></Link></td>
-                        <td><label className="ac-sr" htmlFor={`pr-${p.id}`}>Price of {p.name}</label><input id={`pr-${p.id}`} className="ac-input ac-cell-input" inputMode="decimal" value={e.price ?? p.price} onChange={(ev) => edit(p.id, 'price', ev.target.value)} /></td>
-                        <td><label className="ac-sr" htmlFor={`st-${p.id}`}>Stock of {p.name}</label><input id={`st-${p.id}`} className="ac-input ac-cell-input" inputMode="numeric" value={e.stock ?? p.stock} onChange={(ev) => edit(p.id, 'stock', ev.target.value)} />
-                          {p.stock <= 0 ? <small className="ac-warn">Out of stock</small> : p.stock <= 10 ? <small className="ac-warn">Almost gone</small> : null}</td>
-                        <td>{Number(p.rating || 0).toFixed(1)} ★</td>
-                        <td>{(e.price !== undefined || e.stock !== undefined) && <button className="ac-btn ac-btn-blue ac-btn-small" onClick={() => save(p)}>Save</button>}</td>
-                      </tr>
-                    );
-                  })}</tbody>
-                </table>
-              </div>
-            </section>
+            <SellerProducts products={data.products} onChanged={load} />
 
-            <section id="orders" className="ac-box" aria-labelledby="ord-h" style={{ marginTop: 24 }}>
-              <h2 id="ord-h">Orders with your products</h2>
-              {data.orders.length === 0 ? <p className="ac-muted">No orders yet. When someone buys from you, it shows up here.</p> : (
-                <div className="ac-scroll-x"><table className="ac-table">
-                  <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Your items</th><th>Your share</th><th>Status</th></tr></thead>
-                  <tbody>{data.orders.map((o) => (
-                    <tr key={o.id}><td><b>{o.id}</b></td><td>{o.date}</td><td>{o.customerFirstName}</td><td>{o.items.map((i) => `${i.name} × ${i.quantity}`).join(', ')}</td><td>{money(o.yourShare)}</td>
-                      <td><span className="ac-chip-status" data-tone={o.status === 'Delivered' ? 'ok' : 'info'}>{o.status}</span>{o.pickup && <small className="ac-muted"> pickup</small>}</td></tr>))}</tbody>
-                </table></div>
-              )}
-            </section>
+            <SellerOrders orders={data.orders} onChange={load} />
+            <PayoutSettings />
           </>
         )}
 
         <div id="questions"><EnquiryInbox title="Questions about your products" allowDraft /></div>
       <HowItWorks />
       </main>
+      <a href="#assistant" className="ac-munim-fab" aria-label="Ask Munim about your sales and profit" onClick={(e) => { e.preventDefault(); document.getElementById('assistant')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); document.getElementById('sa-in')?.focus({ preventScroll: true }); }}>Ask Munim</a>
     </div>
   );
 }

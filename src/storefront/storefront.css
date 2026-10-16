@@ -101,7 +101,7 @@
 .ac-icon-btn:hover { background: var(--fog); }
 .ac-count {
   position: absolute; top: 3px; right: 2px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px; background: var(--coral); color: #fff;
-  font-size: 12px; font-weight: 700; display: grid; place-items: center; border: 2px solid #fff;
+  font-size: 14px; font-weight: 700; display: grid; place-items: center; border: 2px solid #fff;
 }
 .ac-bump { animation: ac-bump .5s var(--ease); }
 @keyframes ac-bump { 30% { transform: scale(1.28); } 100% { transform: scale(1); } }
@@ -146,7 +146,7 @@
 }
 @keyframes ac-float { 50% { transform: translateY(-9px); } }
 .ac-chip b { display: block; font-size: 17px; font-weight: 700; line-height: 1.2; }
-.ac-chip small { display: block; color: var(--slate); font-size: 13px; }
+.ac-chip small { display: block; color: var(--slate); font-size: 14px; }
 .ac-c1 { --k: 30; left: 50%; margin-left: 130px; top: 70px; }
 .ac-c2 { --k: 26; left: 50%; margin-left: -460px; bottom: 24px; max-width: 260px; --f: -2; }
 .ac-c3 { --k: 24; left: 50%; margin-left: -300px; top: 24px; --f: -4; }
@@ -199,7 +199,7 @@
 .ac-card-img { position: relative; display: block; aspect-ratio: 1; border-radius: 26px; overflow: hidden; background: var(--tone, var(--fog)); }
 .ac-card-img img { width: 100%; height: 100%; object-fit: cover; transition: transform .7s var(--ease); }
 .ac-card:hover .ac-card-img img { transform: scale(1.06); }
-.ac-badge { position: absolute; top: 14px; left: 14px; padding: 5px 12px; border-radius: 999px; background: #fff; color: var(--ink); font-size: 13px; font-weight: 700; box-shadow: 0 4px 14px rgba(29, 29, 31, .12); }
+.ac-badge { position: absolute; top: 14px; left: 14px; padding: 5px 12px; border-radius: 999px; background: #fff; color: var(--ink); font-size: 14px; font-weight: 700; box-shadow: 0 4px 14px rgba(29, 29, 31, .12); }
 .ac-badge-sale { background: var(--coral); color: #fff; }
 .ac-heart {
   position: absolute; top: 12px; right: 12px; width: 40px; height: 40px; border-radius: 50%; border: 0; display: grid; place-items: center;
@@ -258,7 +258,7 @@
 .ac-footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .ac-footer li a { color: var(--slate); font-size: 15px; }
 .ac-footer li a:hover { color: var(--brand-ink); }
-.ac-legal { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 13px; color: var(--slate); }
+.ac-legal { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; color: var(--slate); }
 
 /* ---------- Assistant ---------- */
 .ac-chat {
@@ -359,3 +359,9 @@ section.ac { min-height: 0; } /* a section that uses .ac for its colours must no
 .ac-chat:hover, .ac-chat:focus-visible { width: 176px; padding: 0 22px 0 18px; justify-content: flex-start; }
 .ac-chat:hover span, .ac-chat:focus-visible span { max-width: 130px; opacity: 1; }
 
+/* Normal 100% sizing. The hero is only a little tighter so the first screen is not all headline. */
+@media (min-width: 1100px) {
+  .ac-hero { padding-top: 28px; }
+  .ac-hero h1 { font-size: clamp(44px, 5.6vw, 84px); }
+  .ac-stage { height: 470px; }
+}

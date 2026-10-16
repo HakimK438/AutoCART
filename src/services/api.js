@@ -17,6 +17,12 @@ api.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
+    // File uploads: let the browser set the multipart boundary instead of forcing JSON.
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      // axios turns FormData into JSON while a JSON Content-Type is set, which drops the file. Remove it the way axios expects.
+      if (typeof config.headers.delete === 'function') config.headers.delete('Content-Type');
+      else delete config.headers['Content-Type'];
+    }
     return config;
   },
   (error) => Promise.reject(error)

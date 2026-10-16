@@ -77,7 +77,7 @@ export const Cart = () => {
             <div><dt>Delivery</dt><dd>{deliveryCharge ? money(deliveryCharge) : 'Free'}</dd></div>
             <div className="ac-sum-total"><dt>Total</dt><dd>{money(finalTotal)}</dd></div>
           </dl>
-          <p className="ac-muted" style={{ fontSize: 13, margin: '0 0 14px' }}>The final price is confirmed by our server when you place the order.</p>
+          <p className="ac-muted" style={{ fontSize: 14, margin: '0 0 14px' }}>The final price is confirmed by our server when you place the order.</p>
 
           {coupon ? (
             <div className="ac-row-between ac-coupon-on"><span><Tag size={14} /> {coupon.code} applied</span><button className="ac-textlink" style={{ border: 0, background: 'none' }} onClick={removeCoupon}>Remove</button></div>

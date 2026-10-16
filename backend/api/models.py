@@ -84,9 +84,24 @@ class Product(models.Model):
     specifications = models.JSONField(default=dict, blank=True)
     seller = models.CharField(max_length=150, blank=True, default='')
     createdAt = models.CharField(max_length=50, blank=True, default='')
+    # Seller-set stock rule: when the shelf count falls to reorderLevel, add restockQty (the seller's usual supplier top-up).
+    costPrice = models.FloatField(default=0.0)  # what the seller pays per unit; 0 means not entered
+    autoRestock = models.BooleanField(default=False)
+    reorderLevel = models.IntegerField(default=5)
+    restockQty = models.IntegerField(default=20)
 
     def __str__(self):
         return self.name
+
+
+class StockLog(models.Model):
+    """Every change to a product's stock and why (sale, manual edit, auto-restock rule), so a seller can always see what happened."""
+    productId = models.CharField(max_length=64, db_index=True)
+    change = models.IntegerField()
+    stockAfter = models.IntegerField()
+    reason = models.CharField(max_length=40)  # sale | manual | auto-restock | cancelled-order
+    by = models.CharField(max_length=150, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
 
 
 class Coupon(models.Model):
@@ -243,6 +258,7 @@ class SellerApplication(models.Model):
     pan = models.CharField(max_length=20, blank=True, default='')
     yearsInBusiness = models.CharField(max_length=20, blank=True, default='0')
     status = models.CharField(max_length=40, choices=STATUS_CHOICES, default='SUBMITTED')
+    upiId = models.CharField(max_length=80, blank=True, default='')  # where customers' UPI payments go (set by the seller)
     riskScore = models.IntegerField(default=0)
     riskCategory = models.CharField(max_length=30, default='Low') # Low, Medium, High
     documentUploads = models.JSONField(default=dict, blank=True) # { docType: { url, fileName, uploadedAt, mimeType } }

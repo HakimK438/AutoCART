@@ -9,6 +9,7 @@ const START = [
   'What is my revenue so far?',
   'Which products have the best ratings?',
   'Are any customer questions waiting?',
+  'What is my profit?',
 ];
 
 /** Ask about your own products in plain words. Answers come from your rows in the database, shown as a small table. */

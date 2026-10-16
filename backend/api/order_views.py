@@ -7,19 +7,13 @@ Rules enforced on the server (the browser is never trusted for money):
 - The order belongs to the signed-in user. Nobody else can see, track, return or cancel it.
 - "Paid" only ever means a payment was verified. Cash on Delivery and Pay at Store stay "Pending".
 
-Razorpay runs in TEST MODE only. With no keys in .env it runs a clearly labelled local demo of the
-same flow (server-created order, signed result, server-side signature check). Live keys are refused.
+Payment methods (no payment gateway is used): Cash on Delivery, UPI or Card on Delivery, Pay at Store, and UPI (Scan & Pay),
+where the customer pays the seller's own UPI ID and the seller confirms receipt (see upi_payments.py).
 """
 
 import datetime
-import hashlib
-import hmac
-import os
 import random
-import uuid
 
-import requests
-from django.conf import settings
 from django.db import transaction
 from rest_framework import status as http
 from rest_framework.decorators import api_view, permission_classes
@@ -27,13 +21,16 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .fulfillment_service import FulfillmentService
-from .models import Coupon, InventoryReservation, Order, OrderFulfillment, Payment, Product, Store, User
+from .models import Coupon, InventoryReservation, Order, OrderFulfillment, Product, Store, User
 from .serializers import OrderFulfillmentSerializer, OrderSerializer
 from .views import get_user_from_token
 
+from .stock_rules import log_sale
+from .upi_payments import UPI, payee_for_items, upi_info
+
 ADMIN_ROLES = ('ADMIN', 'STAFF')
-COD, STORE, RAZORPAY = 'Cash on Delivery', 'Pay at Store', 'Razorpay (Test Mode)'
-PAYMENT_METHODS = (COD, STORE, RAZORPAY)
+COD, POD, STORE = 'Cash on Delivery', 'UPI or Card on Delivery', 'Pay at Store'
+PAYMENT_METHODS = (COD, POD, STORE, UPI)
 MAX_QTY = 20
 CANCELLABLE = ('Pending', 'Confirmed', 'Processing')
 
@@ -79,6 +76,8 @@ def create_order(request):
     user = get_user_from_token(request)
     if not user:
         return _unauth()
+    if user.role != 'CUSTOMER':
+        return Response({'detail': 'Only customer accounts can place orders. Sellers and admins cannot buy.'}, status=http.HTTP_403_FORBIDDEN)
     data = request.data
     method = str(data.get('paymentMethod') or COD)
     if method not in PAYMENT_METHODS:
@@ -97,6 +96,10 @@ def create_order(request):
         return Response({'detail': 'Your cart is empty.'}, status=http.HTTP_400_BAD_REQUEST)
 
     shipping = dict(data.get('shippingAddress') or {})
+    if method == UPI:  # the money goes straight to the seller, so there must be exactly one seller with a UPI ID
+        _company, _upi, problem = payee_for_items([{'id': i} for i in wanted])
+        if problem:
+            return Response({'detail': problem}, status=http.HTTP_400_BAD_REQUEST)
     store = Store.objects.filter(id=data.get('storeId') or shipping.get('storeId')).first()
     if store:
         shipping['storeId'], shipping['storeName'] = store.id, store.name
@@ -133,6 +136,7 @@ def create_order(request):
             p.stock -= qty
             p.stockStatus = stock_label(p.stock)
             p.save(update_fields=['stock', 'stockStatus'])
+            log_sale(p, qty)
 
         now = datetime.datetime.now()
         order_id = f"ORD-{now.year}-{random.randint(1000, 9999)}"
@@ -140,7 +144,7 @@ def create_order(request):
             order_id = f"ORD-{now.year}-{random.randint(1000, 9999)}"
         timeline = [
             {'status': 'Order Placed', 'time': now.strftime('%I:%M %p'), 'completed': True},
-            {'status': 'Confirmed' if method != RAZORPAY else 'Waiting for payment', 'time': now.strftime('%I:%M %p'), 'completed': method != RAZORPAY},
+            {'status': 'Confirmed' if method != UPI else 'Waiting for payment', 'time': now.strftime('%I:%M %p'), 'completed': method != UPI},
             {'status': 'Processing', 'time': '', 'completed': False},
             {'status': 'Out for Delivery' if method != STORE else 'Ready for pickup', 'time': '', 'completed': False},
             {'status': 'Delivered' if method != STORE else 'Picked up', 'time': '', 'completed': False},
@@ -149,8 +153,8 @@ def create_order(request):
             id=order_id, customerName=shipping.get('fullName') or user.name, customerEmail=user.email,
             customerPhone=shipping.get('phone') or user.phone, date=now.strftime('%Y-%m-%d'), totalAmount=total, subtotal=subtotal,
             tax=0.0, shippingFee=fee, discountAmount=discount, paymentMethod=method,
-            paymentStatus='Awaiting Payment' if method == RAZORPAY else 'Pending',
-            status='Pending' if method == RAZORPAY else 'Confirmed', shippingAddress=shipping, items=lines, timeline=timeline,
+            paymentStatus='Awaiting Payment' if method == UPI else 'Pending',
+            status='Pending' if method == UPI else 'Confirmed', shippingAddress=shipping, items=lines, timeline=timeline,
         )
         FulfillmentService.initiate_fulfillment(order, store=store, fulfillment_type='Store Pickup' if method == STORE else 'Store Delivery')
         user.ordersCount += 1
@@ -158,7 +162,8 @@ def create_order(request):
         user.save(update_fields=['ordersCount', 'totalSpent'])
 
     body = OrderSerializer(order).data
-    body['paymentRequired'] = method == RAZORPAY
+    body['paymentRequired'] = method == UPI
+    body['upi'] = upi_info(order) if method == UPI else None
     return Response(body, status=http.HTTP_201_CREATED)
 
 
@@ -175,6 +180,10 @@ def order_tracking_view(request, order_id):
     if fulfillment.store:
         data['storeLocation'] = {'name': fulfillment.store.name, 'address': fulfillment.store.address, 'latitude': fulfillment.store.latitude,
                                  'longitude': fulfillment.store.longitude, 'phone': fulfillment.store.phone}
+    from .seller_orders import drop_point, order_pickup
+    data['orderStatus'] = order.status
+    data['customerLocation'] = drop_point(order)
+    data['pickup'] = order_pickup(order)
     return Response(data)
 
 
@@ -217,137 +226,3 @@ def order_cancel_view(request, order_id):
             FulfillmentService.release_stock_reservation(res.reservationToken, reason=f'Order {order.id} cancelled')
     return Response({'success': True, 'orderId': order.id, 'status': 'Cancelled',
                      'message': 'Your order is cancelled.' + (' Your payment will be refunded by our team.' if was_paid else '')})
-
-
-# ---------------------------------------------------------------- Razorpay --
-
-def _keys():
-    return os.getenv('RAZORPAY_KEY_ID', '').strip(), os.getenv('RAZORPAY_KEY_SECRET', '').strip()
-
-
-def _demo_mode() -> bool:
-    key_id, secret = _keys()
-    return not (key_id and secret)
-
-
-def _secret() -> str:
-    # In demo mode the server signs with a key derived from SECRET_KEY, so only this server can produce a valid signature.
-    return _keys()[1] or hashlib.sha256(f'razorpay-demo:{settings.SECRET_KEY}'.encode()).hexdigest()
-
-
-def _sign(razorpay_order_id: str, payment_id: str) -> str:
-    return hmac.new(_secret().encode(), f'{razorpay_order_id}|{payment_id}'.encode(), hashlib.sha256).hexdigest()
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def payment_config_view(request):
-    """Tells the checkout page which mode it is in. Never returns the secret."""
-    key_id, _ = _keys()
-    return Response({'provider': 'razorpay', 'mode': 'demo' if _demo_mode() else 'test', 'keyId': '' if _demo_mode() else key_id})
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def payment_create_view(request):
-    order, _, err = _order_for(request, request.data.get('orderId'))
-    if err:
-        return err
-    if order.paymentMethod != RAZORPAY or order.paymentStatus not in ('Awaiting Payment', 'Failed'):
-        return Response({'detail': 'This order does not need an online payment.'}, status=http.HTTP_400_BAD_REQUEST)
-    key_id, secret = _keys()
-    if key_id.startswith('rzp_live_'):
-        return Response({'detail': 'Live Razorpay keys are not allowed here. Use test keys (rzp_test_...).'}, status=http.HTTP_503_SERVICE_UNAVAILABLE)
-
-    amount = int(round(order.totalAmount * 100))  # paise, always from the stored order
-    if _demo_mode():
-        rp_order, provider = f'order_demo_{uuid.uuid4().hex[:14]}', 'razorpay-demo'
-    else:
-        try:
-            res = requests.post('https://api.razorpay.com/v1/orders', auth=(key_id, secret), timeout=15,
-                                json={'amount': amount, 'currency': 'INR', 'receipt': order.id, 'notes': {'orderId': order.id}})
-            res.raise_for_status()
-            rp_order, provider = res.json()['id'], 'razorpay'
-        except Exception:
-            return Response({'detail': 'We could not reach the payment service. Please try again or choose another payment method.'},
-                            status=http.HTTP_502_BAD_GATEWAY)
-    Payment.objects.create(id=f'pay-{uuid.uuid4().hex[:10]}', orderId=order.id, provider=provider, providerOrderId=rp_order,
-                           amount=order.totalAmount, status='CREATED')
-    return Response({'orderId': order.id, 'razorpayOrderId': rp_order, 'amount': amount, 'currency': 'INR', 'keyId': '' if _demo_mode() else key_id,
-                     'demo': _demo_mode(), 'name': 'AutoCart', 'description': f'Order {order.id}'})
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def payment_demo_sign_view(request):
-    """Demo mode only: plays the part of the gateway and returns a signed result, as Razorpay's checkout would."""
-    if not _demo_mode():
-        return Response({'detail': 'Not available when Razorpay test keys are set.'}, status=http.HTTP_404_NOT_FOUND)
-    order, _, err = _order_for(request, request.data.get('orderId'))
-    if err:
-        return err
-    pay = Payment.objects.filter(orderId=order.id, providerOrderId=request.data.get('razorpayOrderId'), status='CREATED').first()
-    if not pay:
-        return Response({'detail': 'No pending payment for this order.'}, status=http.HTTP_400_BAD_REQUEST)
-    if request.data.get('outcome') != 'success':
-        return Response({'detail': 'The test payment was declined.', 'declined': True}, status=http.HTTP_402_PAYMENT_REQUIRED)
-    payment_id = f'pay_demo_{uuid.uuid4().hex[:14]}'
-    return Response({'razorpay_order_id': pay.providerOrderId, 'razorpay_payment_id': payment_id, 'razorpay_signature': _sign(pay.providerOrderId, payment_id)})
-
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def payment_verify_view(request):
-    order, _, err = _order_for(request, request.data.get('orderId'))
-    if err:
-        return err
-    rp_order = str(request.data.get('razorpay_order_id') or '')
-    rp_payment = str(request.data.get('razorpay_payment_id') or '')
-    signature = str(request.data.get('razorpay_signature') or '')
-    pay = Payment.objects.filter(orderId=order.id, providerOrderId=rp_order, status='CREATED').first()
-    if not pay:
-        return Response({'detail': 'No pending payment found for this order.'}, status=http.HTTP_400_BAD_REQUEST)
-
-    if not (rp_payment and signature and hmac.compare_digest(_sign(rp_order, rp_payment), signature)):
-        pay.status = 'FAILED'
-        pay.save(update_fields=['status'])
-        order.paymentStatus = 'Failed'
-        order.save(update_fields=['paymentStatus'])
-        return Response({'detail': 'We could not confirm that payment. You have not been charged. Please try again.'}, status=http.HTTP_400_BAD_REQUEST)
-
-    pay.status, pay.providerPaymentId = 'PAID', rp_payment
-    pay.save(update_fields=['status', 'providerPaymentId'])
-    order.paymentStatus, order.status = 'Paid', 'Confirmed'
-    order.timeline = [({**t, 'status': 'Payment received', 'completed': True} if t.get('status') == 'Waiting for payment' else t) for t in (order.timeline or [])]
-    order.save(update_fields=['paymentStatus', 'status', 'timeline'])
-    return Response(OrderSerializer(order).data)
-
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def payment_admin_status_view(request):
-    """Admin only: which Razorpay mode is on, whether Razorpay accepts the keys, and the latest payments. Never returns the secret."""
-    user = get_user_from_token(request)
-    if not user or user.role not in ADMIN_ROLES:
-        return Response({'detail': 'Only an administrator can see this.'}, status=http.HTTP_403_FORBIDDEN)
-    key_id, secret = _keys()
-    live = key_id.startswith('rzp_live_')
-    connection = None
-    if key_id and secret and not live:
-        try:
-            res = requests.get('https://api.razorpay.com/v1/orders', params={'count': 1}, auth=(key_id, secret), timeout=10)
-            if res.status_code == 200:
-                connection = {'ok': True, 'message': 'Razorpay accepted your test keys.'}
-            elif res.status_code in (401, 403):
-                connection = {'ok': False, 'message': 'Razorpay rejected these keys. Check that the Key ID and Secret are a matching test pair.'}
-            else:
-                connection = {'ok': False, 'message': f'Razorpay answered with status {res.status_code}.'}
-        except Exception:
-            connection = {'ok': False, 'message': 'Could not reach Razorpay from this computer. Check your internet connection.'}
-    recent = [{'id': p.id, 'orderId': p.orderId, 'provider': p.provider, 'amount': p.amount, 'status': p.status, 'createdAt': p.createdAt}
-              for p in Payment.objects.order_by('-createdAt')[:20]]
-    return Response({
-        'mode': 'demo' if _demo_mode() else ('blocked' if live else 'test'),
-        'keyIdHint': f'{key_id[:9]}...{key_id[-4:]}' if key_id and len(key_id) > 14 else '',
-        'liveKeyBlocked': live, 'connection': connection, 'recent': recent,
-    })

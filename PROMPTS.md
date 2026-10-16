@@ -266,7 +266,7 @@ Update PROJECT_REQUIREMENTS.md, README_FREE_STACK.md and COMPLETE_PLAN.md so the
 
 ## AI agents by role: requirements and honest status (updated)
 
-Goal: a customer, seller and admin experience that is useful in real life, using free tools only (Groq/Gemini free tiers with a rule-based fallback, local OCR, OpenStreetMap, Razorpay TEST mode only).
+Goal: a customer, seller and admin experience that is useful in real life, using free tools only (Groq/Gemini free tiers with a rule-based fallback, local OCR, OpenStreetMap; no payment gateway: pay on delivery, at the store, or UPI straight to the seller).
 
 Rules for every agent: answer only from data in our database; never invent products, prices, reviews or stock; say "I don't know" and offer a human; show why a suggestion was made; no personal documents sent to any LLM.
 
@@ -286,7 +286,7 @@ Rules for every agent: answer only from data in our database; never invent produ
 
 Visibility rules (built and browser-tested): customers never see admin or seller links or data; sellers see only their own products and order share; admin tools live behind /admin/login, seller tools behind /seller/login.
 
-Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products have wrong photos or an absurd price in seed data; real Razorpay test checkout and Gmail sending need your own keys in .env; legal pages missing.
+Known gaps: PostgreSQL/Redis/Docker not used yet (SQLite); some sample products have wrong photos or an absurd price in seed data; real Gmail sending needs your own app password in .env; legal pages missing.
 
 ### Role agent prompts (use these as system rules)
 - Customer assistant: "You are AutoCart's shopping assistant for Mumbai local stores. Use only the product and store data provided. Never invent prices, stock or reviews. Keep answers short, show up to 4 products, offer a human when unsure."

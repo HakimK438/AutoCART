@@ -19,7 +19,9 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .seller_analytics import analytics
-from .models import Enquiry, Order, Payment, Product, SellerApplication, SupportTicket
+from .product_images import save_photo
+from .stock_rules import history as stock_history
+from .models import Payment, StockLog, Enquiry, Order, Payment, Product, SellerApplication, SupportTicket
 from .views import get_user_from_token
 
 ADMIN_ROLES = ('ADMIN', 'STAFF')
@@ -63,7 +65,8 @@ def seller_overview_view(request):
         units += sum(int(i.get('quantity') or 0) for i in mine)
         orders.append({'id': o.id, 'date': o.date, 'status': o.status, 'paymentStatus': o.paymentStatus, 'paymentMethod': o.paymentMethod,
                        'customerFirstName': (o.customerName or 'Customer').split()[0], 'items': [{'name': i.get('name'), 'quantity': i.get('quantity')} for i in mine],
-                       'yourShare': round(share), 'pickup': bool((o.shippingAddress or {}).get('storeName')) and not (o.shippingAddress or {}).get('addressLine')})
+                       'yourShare': round(share), 'canPack': o.status in ('Confirmed', 'Processing', 'Pending', 'Order Placed') and not (o.paymentMethod == 'UPI (Scan & Pay)' and o.paymentStatus != 'Paid'),
+                       'utr': (Payment.objects.filter(orderId=o.id, provider='upi').exclude(status='FAILED').values_list('providerPaymentId', flat=True).first() or ''), 'pickup': bool((o.shippingAddress or {}).get('storeName')) and not (o.shippingAddress or {}).get('addressLine')})
 
     open_questions = Enquiry.objects.filter(sellerName=company, status='OPEN').count()
     low = [p for p in products if 0 < p.stock <= LOW_STOCK]
@@ -83,14 +86,15 @@ def seller_overview_view(request):
         'company': company, 'productsCount': len(products), 'outOfStock': len(out), 'lowStock': len(low), 'openQuestions': open_questions,
         'ordersCount': len(orders), 'unitsSold': units, 'revenue': round(revenue), 'tips': tips, 'orders': orders[:25],
         'products': [{'id': p.id, 'name': p.name, 'price': p.price, 'originalPrice': p.originalPrice, 'stock': p.stock, 'rating': p.rating,
-                      'reviewCount': p.reviewCount, 'image': (p.images or [''])[0], 'category': p.category} for p in products],
+                      'reviewCount': p.reviewCount, 'image': (p.images or [''])[0], 'category': p.category,
+                      'autoRestock': p.autoRestock, 'reorderLevel': p.reorderLevel, 'restockQty': p.restockQty, 'costPrice': p.costPrice} for p in products],
     })
 
 
 @api_view(['PATCH'])
 @permission_classes([AllowAny])
 def seller_product_update_view(request, product_id):
-    """A seller can change the price and stock of their own products, and nothing else."""
+    """A seller can change the price, stock, auto-restock rule and photo of their own products, and nothing else."""
     user, company, err = _seller_or_error(request)
     if err:
         return err
@@ -98,6 +102,7 @@ def seller_product_update_view(request, product_id):
     if not product:
         return Response({'detail': 'Product not found.'}, status=http.HTTP_404_NOT_FOUND)
     errors = {}
+    old_stock = product.stock
     if 'price' in request.data:
         try:
             price = float(request.data['price'])
@@ -114,6 +119,32 @@ def seller_product_update_view(request, product_id):
             product.stock = stock
         except (TypeError, ValueError):
             errors['stock'] = 'Enter a whole number, 0 or more.'
+    if 'costPrice' in request.data:
+        try:
+            cost = float(request.data['costPrice'] or 0)
+            if cost < 0:
+                raise ValueError
+            product.costPrice = cost
+        except (TypeError, ValueError):
+            errors['costPrice'] = 'Enter what one unit costs you, 0 or more.'
+    if 'autoRestock' in request.data:
+        product.autoRestock = str(request.data['autoRestock']).lower() in ('true', '1', 'yes', 'on')
+    for key, lo, hi, msg in (('reorderLevel', 0, 100000, 'Enter a whole number, 0 or more.'), ('restockQty', 1, 100000, 'Enter a whole number, 1 or more.')):
+        if key in request.data:
+            try:
+                val = int(request.data[key])
+                if not lo <= val <= hi:
+                    raise ValueError
+                setattr(product, key, val)
+            except (TypeError, ValueError):
+                errors[key] = msg
+    photo = request.FILES.get('image')
+    if photo and not errors:
+        url, problem = save_photo(photo, request)
+        if problem:
+            errors['image'] = problem
+        else:
+            product.images = [url] + [i for i in (product.images or []) if i != url][:5]
     if errors:
         return Response({'detail': 'Please fix the highlighted fields.', 'errors': errors}, status=http.HTTP_400_BAD_REQUEST)
     if product.originalPrice and product.originalPrice > product.price:
@@ -122,7 +153,22 @@ def seller_product_update_view(request, product_id):
         product.discount = 0
     product.stockStatus = 'Out of Stock' if product.stock <= 0 else ('Low Stock' if product.stock <= LOW_STOCK else 'In Stock')
     product.save()
-    return Response({'id': product.id, 'price': product.price, 'stock': product.stock, 'discount': product.discount, 'stockStatus': product.stockStatus})
+    if product.stock != old_stock:
+        StockLog.objects.create(productId=product.id, change=product.stock - old_stock, stockAfter=product.stock, reason='manual', by=user.email)
+    return Response({'id': product.id, 'price': product.price, 'stock': product.stock, 'discount': product.discount, 'stockStatus': product.stockStatus,
+                     'autoRestock': product.autoRestock, 'reorderLevel': product.reorderLevel, 'restockQty': product.restockQty, 'costPrice': product.costPrice, 'image': (product.images or [''])[0]})
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def seller_stock_log_view(request, product_id):
+    """The history of one product's stock: sales, manual edits and auto-restocks."""
+    user, company, err = _seller_or_error(request)
+    if err:
+        return err
+    if not Product.objects.filter(id=product_id, seller=company).exists():
+        return Response({'detail': 'Product not found.'}, status=http.HTTP_404_NOT_FOUND)
+    return Response({'history': stock_history(product_id)})
 
 
 @api_view(['GET'])
@@ -177,6 +223,12 @@ def admin_overview_view(request):
         'cards': {'applications': review_q.count(), 'openTickets': tickets_open.count(), 'overdueTickets': overdue, 'openEnquiries': enquiries,
                   'awaitingPayment': awaiting, 'lowStock': low.count(), 'outOfStock': out, 'ordersToday': today_orders.count()},
         'briefing': briefing,
+        'applications': [{
+            'id': ap.id, 'company': ap.companyName, 'applicant': ap.applicantName, 'city': ap.city, 'status': ap.status,
+            'riskScore': ap.riskScore, 'riskCategory': ap.riskCategory, 'trustScore': max(0, 100 - ap.riskScore),
+            'documents': ap.documents.count(), 'submitted': ap.createdAt.date().isoformat(),
+            'reasons': [c['label'] for c in (ap.verificationResults or {}).get('checks', []) if c.get('status') in ('mismatch', 'missing')][:3],
+        } for ap in review_q.order_by('-riskScore')[:8]],
     })
 
 
@@ -251,10 +303,18 @@ def seller_product_create_view(request):
         errors['stock'] = 'Enter a whole number, 0 or more.'
     if errors:
         return Response({'detail': 'Please fix the highlighted fields.', 'errors': errors}, status=http.HTTP_400_BAD_REQUEST)
+    photo_url = ''
+    if request.FILES.get('image'):
+        photo_url, problem = save_photo(request.FILES['image'], request)
+        if problem:
+            return Response({'detail': problem, 'errors': {'image': problem}}, status=http.HTTP_400_BAD_REQUEST)
     pid = f'prod-{uuid.uuid4().hex[:8]}'
     product = Product.objects.create(
         id=pid, name=name, slug=f"{slugify(name)[:200]}-{pid[-4:]}", category=category, brand=str(d.get('brand', '')).strip()[:100],
         price=price, originalPrice=0, discount=0, stock=stock, description=str(d.get('description', '')).strip()[:2000],
         stockStatus='Out of Stock' if stock <= 0 else ('Low Stock' if stock <= LOW_STOCK else 'In Stock'),
-        seller=company, createdAt=timezone.now().date().isoformat(), newArrival=True)
+        seller=company, createdAt=timezone.now().date().isoformat(), newArrival=True, images=[photo_url] if photo_url else [],
+        autoRestock=str(d.get('autoRestock', '')).lower() in ('true', '1', 'yes', 'on'),
+        reorderLevel=int(d.get('reorderLevel') or 5), restockQty=int(d.get('restockQty') or 20))
+    StockLog.objects.create(productId=product.id, change=stock, stockAfter=stock, reason='manual', by=user.email)
     return Response({'id': product.id, 'name': product.name}, status=http.HTTP_201_CREATED)

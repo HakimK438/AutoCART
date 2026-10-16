@@ -3,8 +3,9 @@ import { Link, useParams } from 'react-router-dom';
 import { Check, Circle } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
+import OrderRouteMap from '../../storefront/OrderRouteMap';
 import StoreMap from '../../storefront/StoreMap';
-import RazorpayTest from '../../storefront/RazorpayTest';
+import UpiPay from '../../storefront/UpiPay';
 import { money, sized, firstImage } from '../../storefront/parts';
 import { statusTone } from './Orders';
 import '../../storefront/storefront.css';
@@ -38,7 +39,8 @@ export const OrderDetails = () => {
   if (error) return <div className="ac ac-page"><div className="ac-wrap"><div className="ac-box" role="alert">{error} <Link to="/orders" className="ac-textlink">Back to orders</Link></div></div></div>;
   if (!order) return <div className="ac ac-page"><div className="ac-wrap"><div className="ac-skel" style={{ height: 300 }} /></div></div>;
 
-  const needsPayment = order.paymentMethod.startsWith('Razorpay') && ['Awaiting Payment', 'Failed'].includes(order.paymentStatus) && order.status !== 'Cancelled';
+  const isUpi = order.paymentMethod.startsWith('UPI (');
+  const needsPayment = isUpi && ['Awaiting Payment', 'Failed'].includes(order.paymentStatus) && order.status !== 'Cancelled';
   const canCancel = ['Pending', 'Confirmed', 'Processing'].includes(order.status);
   const store = track?.storeLocation;
   const steps = track?.timeline?.length ? track.timeline : order.timeline || [];
@@ -64,11 +66,21 @@ export const OrderDetails = () => {
             {track && <p className="ac-muted" style={{ fontSize: 14, margin: '8px 0 0' }}>Tracking {track.trackingNumber} · about {track.estimatedDeliveryMinutes} minutes once it leaves the store.</p>}
           </div>
 
-          {store?.latitude != null && (
+          {(track?.pickup && track?.customerLocation) && (
+            <div className="ac-box">
+              <h2>Route from the store to you</h2>
+              <p className="ac-muted" style={{ margin: '4px 0 12px' }}>{track.pickup.name} packs your order and brings it to you.</p>
+              <OrderRouteMap pickup={track.pickup} drop={track.customerLocation} height={300} />
+            </div>
+          )}
+
+          {!(track?.pickup && track?.customerLocation) && store?.latitude != null && (
             <div className="ac-box">
               <h2>Fulfilled from</h2>
               <p className="ac-muted" style={{ margin: '4px 0 12px' }}>{store.name}, {store.address}{store.phone ? ` · ${store.phone}` : ''}</p>
-              <StoreMap stores={[{ storeId: 'x', storeName: store.name, address: store.address, latitude: store.latitude, longitude: store.longitude }]} height={280} selectedId="x" />
+              {track?.customerLocation
+                ? <OrderRouteMap pickup={{ name: store.name, address: store.address, lat: store.latitude, lng: store.longitude }} drop={track.customerLocation} height={300} />
+                : <StoreMap stores={[{ storeId: 'x', storeName: store.name, address: store.address, latitude: store.latitude, longitude: store.longitude }]} height={280} selectedId="x" />}
             </div>
           )}
 
@@ -90,7 +102,9 @@ export const OrderDetails = () => {
               <div className="ac-sum-total"><dt>Total</dt><dd>{money(order.totalAmount)}</dd></div>
             </dl>
             <p className="ac-muted" style={{ fontSize: 14 }}>{order.paymentMethod}</p>
-            {needsPayment && <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={() => setPaying(true)}>Pay now</button>}
+            {needsPayment && <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={() => setPaying(true)}>{order.paymentStatus === 'Failed' ? 'Pay again with UPI' : 'Pay now with UPI'}</button>}
+            {isUpi && order.paymentStatus === 'Verifying' && <p className="ac-muted" role="status">Waiting for the seller to confirm your UPI payment.</p>}
+            {isUpi && order.paymentStatus === 'Failed' && <p className="ac-warn" role="alert">The seller could not find this payment. Check the UPI reference and try again.</p>}
             {canCancel && <button className="ac-btn ac-btn-outline ac-btn-small" style={{ width: '100%', marginTop: 10 }} onClick={() => act('cancel', 'Cancel')}>Cancel order</button>}
             {['Delivered', 'Completed'].includes(order.status) && <button className="ac-btn ac-btn-outline ac-btn-small" style={{ width: '100%', marginTop: 10 }} onClick={() => act('return', 'Return')}>Return an item</button>}
           </div>
@@ -105,7 +119,7 @@ export const OrderDetails = () => {
           </div>
         </aside>
       </div>
-      {paying && <RazorpayTest order={order} user={user} onPaid={(o) => { setPaying(false); setOrder(o); setNote('Payment received. Thank you!'); load(); }} onClose={() => setPaying(false)} />}
+      {paying && <UpiPay order={order} onSubmitted={() => { setPaying(false); setNote('Thanks. The seller will confirm your payment shortly.'); load(); }} onClose={() => setPaying(false)} />}
     </div></div>
   );
 };

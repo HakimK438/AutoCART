@@ -45,6 +45,7 @@ export const Register = () => {
             A
           </div>
           <h2 className="text-2xl font-extrabold text-gray-900">Create Account</h2>
+          <p className="text-sm">Want to sell instead? <Link to="/seller/apply" className="font-bold underline">Apply as a seller</Link> (documents needed).</p>
           <p className="text-xs text-gray-500">Join AuraCart India to start shopping today</p>
         </div>
 

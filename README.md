@@ -2,11 +2,11 @@
 
 A marketplace for **local stores in Mumbai**, with three separate experiences (customer, seller, admin) and AI assistants that answer only from the real database.
 
-- **Customers** find what is in stock in nearby stores, buy for delivery or pickup, track orders, and get help from **Saathi**, the shopping assistant.
-- **Sellers** join with their documents, list products, see sales charts and what they earn after commission, and ask **Munim**, the seller assistant, about their own shop.
-- **Admins** review seller applications, handle support tickets and enquiries, and see a daily briefing of what needs attention.
+- **Customers** find what is in stock in nearby stores, buy for delivery or pickup, track orders on a map, and get help from **Saathi**, the shopping assistant, which can also place an order from the chat.
+- **Sellers** create an account, apply with their documents, list products with photos, manage stock by hand or automatically, see sales, earnings and profit, and ask **Munim**, the seller assistant, about their own shop.
+- **Admins** review seller applications with every document and check, approve or reject, and see a daily briefing of what needs attention.
 
-Everything runs on free tools. Payments are Razorpay **test mode** only.
+Everything runs on free tools. **There is no payment gateway**: customers pay on delivery, at the store, or straight to the seller by UPI (the seller confirms the money arrived).
 
 ---
 
@@ -21,7 +21,6 @@ Copy `.env.example` to `.env` in the project root. Everything is optional:
 | Variable | What it does |
 |---|---|
 | `GEMINI_API_KEY` | Free key from Google AI Studio. Without it the assistants still work, using database-only answers. |
-| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | **Test** keys only (`rzp_test_...`). Without them, "Razorpay (Test Mode)" runs a clearly labelled demo. Live keys are refused. |
 | `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` | Gmail app password. Without them, emails are printed in the server console. |
 
 Never commit `.env`. It is in `.gitignore`.
@@ -32,7 +31,7 @@ Never commit `.env`. It is in `.gitignore`.
 cd backend
 python -m venv .venv
 .venv\Scripts\activate          # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt     # includes langgraph and fastembed; the first chat downloads a ~130 MB embedding model once
 python manage.py migrate
 python seed_db.py
 python seed_more_products.py
@@ -59,13 +58,15 @@ Open http://localhost:5173.
 |---|---|---|---|
 | Admin | `/admin/login` | admin@auracart.com | admin123 |
 | Seller | `/seller/login` | seller@example.com | seller123 |
-| Customer | `/login` | create one on `/register` | any |
+| Customer | `/login` | create one on `/register` | any (6+ characters) |
+
+Change these before putting the site anywhere public. To try **Pay now with UPI**, the seller must first add a UPI ID in the Seller centre ("Get paid by UPI").
 
 ### Tests
 
 ```bash
 cd backend
-python manage.py test        # 119 tests; the AI model is switched off so tests never use the network
+python manage.py test        # 163 tests; the AI model is switched off so tests never use the network
 npm run build                # frontend production build
 ```
 
@@ -74,30 +75,40 @@ npm run build                # frontend production build
 ## What is built
 
 **Customer**
-- Home, shop with filter pills and sorting, product pages with photos, reviews, instant "Quick answers", comparison table, a **Buy now** button, and a sticky buy bar.
-- Deal of the day, "shop by need" collections, and category icons (using real ratings, stock and prices only).
-- Cart, checkout (server calculates price, coupon, delivery fee and stock), orders, tracking, return and cancel, wishlist, profile.
-- Payment methods: Cash on Delivery, Pay at Store, Razorpay (Test Mode).
-- Store map (OpenStreetMap) and live per-store stock.
-- Contact form and support tickets.
-- **Saathi** chat: greets you by first name, finds products with Add to cart buttons, looks up your orders, hands over to a person. It remembers only categories, a usual budget and your last few searches, and you can see and delete that from the chat.
+- Home, a compact shop (five products per row, price and Add to cart visible without scrolling), filter pills and sorting, product pages with photos, reviews, instant "Quick answers", a comparison table, **Buy now** and a sticky buy bar.
+- **Only customer accounts can buy.** A visitor who presses Buy now goes straight to the customer sign-in, and the item is added to their cart after they sign in. Sellers and admins are told buying is for customers (and the server refuses their orders).
+- Checkout: the server works out price, coupon, delivery fee and stock. The address can be filled from your **current location** (street, area, city and PIN, looked up with free OpenStreetMap). Incomplete forms say what is missing and jump to the first empty field.
+- Payment methods: **Cash on delivery**, **UPI or card on delivery**, **Pay at the store**, and **Pay now with UPI** (scan a QR that pays the seller directly, then enter the 12-digit UPI reference; the seller confirms). UPI is offered only when the whole cart is from one seller who has added a UPI ID, and checkout says why when it is not available.
+- Orders, cancel, return, wishlist, profile, support tickets and a contact form. The order page shows the steps and a **road-route map** from the seller's store to you, with distance and drive time.
+- **Saathi** chat, built as a **LangGraph agent** (classify, retrieve, answer, buy):
+  - Retrieval (RAG) uses a free local Hugging Face embedding model (BAAI/bge-small-en-v1.5, via fastembed) over products and a small policy FAQ.
+  - Gemini (free tier) words the reply using only what was retrieved. If Gemini or the model is unavailable it falls back to templates and keyword search.
+  - Every product card has **Buy now**. Say "buy the first one" and a confirm step appears in the chat; a customer with a past address confirms in one tap (cash on delivery), others go to checkout.
+  - Greets you by first name, answers "where is my order" with the store, distance and status, and hands over to a person. It remembers only categories, a usual budget and your last few searches, which you can see and delete in the chat.
 
 **Seller**
-- Application wizard: details, store location pin on a map, planned products, documents (masked Aadhaar, PAN, GST, address and bank proof), review and submit.
-- Documents are read locally (free OCR). The system shows what it read, compares it with the form, and computes a risk score.
-- Seller centre: sales charts, earnings after commission, add products, edit price and stock, orders with your items, customer questions with suggested answers, and **Munim**.
-- "How selling works" and the fee table, shown before and after joining.
+- **Create a seller account** on the seller sign-in page. This opens a draft application straight away, so the admin can see the sign-up.
+- Application wizard in a seller-only frame (no shop header): business details, store location pin, **products with stock and a photo**, documents (masked Aadhaar, PAN, GST, address and bank proof) and review. The list of required documents is shown on every step. **You can submit without all documents**; the application is saved and marked incomplete until they are added.
+- Documents are read locally (free OCR). The system shows what it read, compares it with the form and computes a risk score.
+- On approval, the products from the application go live with their stock and photo.
+- Seller centre: sales charts, earnings after commission, and **profit** once you enter a cost price per product. Add products with photos, edit price, **stock by hand (+1, +10) or with an auto-restock rule** (after a sale, if stock is at or below N, add M), and a stock history showing sales, manual edits and auto-restocks.
+- **Orders to pack**: confirm a UPI payment, one click **Confirm & pack**, then a route map to the customer.
+- **Get paid by UPI**: the seller's own UPI ID. AutoCart never touches the money.
+- **Munim**, the seller assistant, answers from the seller's own data: low stock, best sellers, revenue, orders, ratings, waiting questions, and **profit**. Gemini words the answer; the numbers always come from the database.
 
 **Admin**
-- Separate login. Needs-attention cards and a plain-language daily briefing.
-- Seller applications with documents, OCR results, risk summary, and approve / reject / ask for more information / suspend, with an audit trail.
-- Support inbox, enquiries (with suggested answers), payment status and a Razorpay connection test.
+- Separate login with a profile menu (Seller applications, Settings, View the store, Sign out). Needs-attention cards and a plain-language daily briefing.
+- **Seller applications** with tabs including **Still filling in** (sign-ups that have not submitted). Each application shows a risk badge ("Incomplete" while documents are missing), a "before you approve" checklist, Aadhaar and PAN cards, documents you can open, the store on a map, and a decision bar. **Approve stays locked until Aadhaar, PAN and a store location exist** (enforced on the server too).
+- **Sellers**: click a seller for contact details, live numbers worked out from real orders, their products and their application.
+- **Payments**: how customers pay, and UPI payments waiting for confirmation.
+- Support inbox and enquiries with suggested answers.
 
-**Business model** (`backend/api/commission.py`, public at `/api/commission`): free to join and list, no monthly fee, commission only on a sale (Electronics 5%, Fashion 10%, Home & Kitchen 8%, Beauty 8%, Sports 7%, Books 4%, Grocery 3%, Toys 7%, other 6%). Online payments add the payment provider's charge (about 2%) at cost. **These are proposed launch rates, not a signed price list and not any company's actual rates.**
+**Business model** (`backend/api/commission.py`, public at `/api/commission`): free to join and list, no monthly fee, commission only on a sale (Electronics 5%, Fashion 10%, Home & Kitchen 8%, Beauty 8%, Sports 7%, Books 4%, Grocery 3%, Toys 7%, other 6%). **These are proposed launch rates, not a signed price list and not any company's actual rates.**
 
 **Privacy and safety rules**
 - A customer never sees admin or seller screens or data. A seller never sees admin data and sees only their own products and orders.
-- Uploaded documents are private files, only visible to the owner and admins.
+- Uploaded documents are private files, only visible to the owner and admins. Product photos are checked, resized and served publicly.
+- "Paid" for UPI only ever means a seller or admin confirmed the money arrived. The same UPI reference cannot be used on two orders.
 - Assistants answer from database rows only. They are told not to invent prices, stock or reviews.
 
 ---
@@ -107,19 +118,19 @@ npm run build                # frontend production build
 | Not built | Reason |
 |---|---|
 | **Looking up a person's details by typing an Aadhaar number** | This will not be built. Aadhaar data is private. There is no free, legal public service for it, and the Aadhaar Act does not allow a private business to look people up or to store full Aadhaar numbers. Instead, a seller uploads their **own masked Aadhaar**. The system reads the name, date of birth and address, stores **only the last 4 digits**, and rejects an upload that shows all 12 digits. |
+| A payment gateway (cards and net banking online) | Removed on purpose. It needs a business account and keys. UPI scan-and-pay to the seller and pay-on-delivery are used instead. Scanning the QR with a real UPI app was **not tested**. |
 | Recognising a returning seller from their documents | Planned. It must only ever show a seller their own record after they sign in. |
-| Store name and location entered after verification | Today the wizard asks for store details before documents. |
-| Shortest-route order tracking | Planned. Orders have status tracking, not a map route. |
-| Seller order-status updates (packed, shipped) | Planned. |
-| Personalised "picked for you", fraud detection | Planned. |
-| Photo reviews | Planned. |
+| Live GPS tracking of a delivery rider | The map shows the road route and distance from store to customer, not a moving rider. The route comes from the free public OSRM service and can be unavailable (a straight line is drawn then). |
+| Seller order updates beyond "Packed" (shipped, delivered) | Planned. |
+| Personalised "picked for you", fraud detection, photo reviews | Planned. |
+| LangChain chains and hosted Hugging Face inference | The agent uses LangGraph with langchain-core. The Hugging Face model runs locally; hosted inference needs your own token and is not used. |
 | PostgreSQL, Redis, Docker | The app runs on SQLite for now. |
 | Legal pages (terms, privacy, refund policy) | Missing. |
-| Real Razorpay test checkout and real Gmail sending | Built, but need your own keys in `.env`. They were not tested with real keys. |
+| Real Gmail sending | Built, but needs your own app password in `.env`. Not tested with real credentials. |
 
-**Known data quality issue:** some sample products share or have an unrelated photo. The shop shows a branded tile instead of a clearly wrong photo where it can detect this, but a few wrong photos remain.
+**Known data quality issue:** some sample products have an unrelated photo (for example a phone shown for a mouse). The shop shows a branded tile instead of a photo it can tell is reused, but a few wrong photos remain. Sellers can replace any photo of their own products.
 
-**AI behaviour to expect:** Gemini is a free service and sometimes answers "503 high demand". When that happens the assistants fall back to database-only answers (still correct, just less conversational), then try Gemini again after a few minutes.
+**AI behaviour to expect:** Gemini is a free service and sometimes answers "503 high demand". When that happens the assistants fall back to database-only answers (still correct, just less conversational) and try Gemini again after a few minutes. Gemini wording was not confirmed during testing for this reason.
 
 ---
 
