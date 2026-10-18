@@ -1,25 +1,32 @@
 import { useAuth } from '../hooks/useAuth';
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useRef } from 'react';
 import { cartService } from '../services/cartService';
 
 export const CartContext = createContext(null);
 
 export const CartProvider = ({ children }) => {
   const { user } = useAuth();
-  const [cartItems, setCartItems] = useState(() => {
-    const saved = localStorage.getItem('auracart_cart');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // One cart per account. The old single shared key leaked one person's cart to whoever signed in next on the same browser.
+  const cartKey = `auracart_cart:${user?.id ?? user?.email ?? 'guest'}`;
+  const readCart = (key) => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
+  const [cartItems, setCartItems] = useState(() => readCart(cartKey));
+  const loadedKey = useRef(cartKey);
   const [coupon, setCoupon] = useState(null);
   const [discountAmount, setDiscountAmount] = useState(0);
 
+  // Signing in or out swaps to that account's own cart.
   useEffect(() => {
-    localStorage.setItem('auracart_cart', JSON.stringify(cartItems));
-  }, [cartItems]);
+    try { localStorage.removeItem('auracart_cart'); } catch { /* ignore */ }
+    if (loadedKey.current !== cartKey) { loadedKey.current = cartKey; setCartItems(readCart(cartKey)); setCoupon(null); setDiscountAmount(0); }
+  }, [cartKey]);
+  useEffect(() => {
+    if (loadedKey.current !== cartKey) return;  // still switching accounts: do not write the old cart under the new key
+    try { localStorage.setItem(cartKey, JSON.stringify(cartItems)); } catch { /* private mode */ }
+  }, [cartItems, cartKey]);
 
   // After a visitor signs in as a customer, put what they wanted in the cart (and continue to checkout for Buy now).
   useEffect(() => {
-    if (!user || user.role !== 'CUSTOMER') return;
+    if (!user || !['CUSTOMER', 'SELLER'].includes(user.role)) return;
     let pending = null;
     try { pending = JSON.parse(sessionStorage.getItem('autocart_pending_buy') || 'null'); sessionStorage.removeItem('autocart_pending_buy'); } catch { pending = null; }
     if (!pending?.product) return;
@@ -28,9 +35,9 @@ export const CartProvider = ({ children }) => {
   }, [user]);
 
   const addToCart = (product, quantity = 1, opts = {}) => {
-    // Only customer accounts can buy. A visitor goes to the customer sign-in (their choice is remembered);
-    // a seller or admin gets an explanation. Both are handled by BuyGate.
-    if (!user || user.role !== 'CUSTOMER') {
+    // Customers and sellers can shop. A visitor goes to sign-in (their choice is remembered);
+    // an administrator gets an explanation. Both are handled by BuyGate.
+    if (!user || !['CUSTOMER', 'SELLER'].includes(user.role)) {
       if (!user) {
         try { sessionStorage.setItem('autocart_pending_buy', JSON.stringify({ product, quantity, buyNow: !!opts.buyNow })); } catch { /* private mode: they just add it again after signing in */ }
       }

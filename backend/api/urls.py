@@ -37,15 +37,18 @@ from .support_views import (
 )
 from .order_views import (
     order_tracking_view, order_return_view, order_cancel_view,
+    payment_config_view, payment_create_view, payment_verify_view, payment_demo_sign_view,
 )
 from .commission import commission_view
 from .assistant_memory import assistant_memory_view
 from .support_views import support_last_address_view
-from .seller_views import admin_seller_detail_view, seller_application_start_view, seller_application_product_image_view
+from .seller_views import admin_triage_view, admin_seller_report_view, admin_sellers_overview_view, seller_application_autofill_view, admin_seller_detail_view, seller_application_start_view, seller_application_product_image_view
 from .product_images import serve_photo
 from .role_views import seller_stock_log_view
 from .upi_payments import upi_check_view, order_upi_view, order_upi_reference_view, payment_confirm_view, seller_payout_settings_view, payments_admin_view
-from .seller_orders import seller_pack_order_view, seller_order_route_view
+from .seller_orders import seller_pack_order_view, seller_dispatch_order_view, seller_deliver_order_view, seller_order_route_view
+from .automation import seller_automation_view, seller_pack_all_view, admin_automation_view
+from .notifications import notifications_view, notifications_read_view
 from .seller_assistant import seller_assistant_view
 from .role_views import seller_product_create_view, seller_overview_view, seller_product_update_view, admin_overview_view, enquiry_draft_view
 from .review_views import reviews_view
@@ -112,13 +115,25 @@ urlpatterns = [
     re_path(r'^seller/payout-settings/?$', seller_payout_settings_view, name='seller_payout_settings'),
     re_path(r'^payments/status/?$', payments_admin_view, name='payment_status'),
 
+    # Payments: online through Razorpay (test mode, or a labelled local demo with no keys)
+    re_path(r'^payments/config/?$', payment_config_view, name='payment_config'),
+    re_path(r'^payments/razorpay/order/?$', payment_create_view, name='payment_create'),
+    re_path(r'^payments/razorpay/verify/?$', payment_verify_view, name='payment_verify'),
+    re_path(r'^payments/razorpay/demo-sign/?$', payment_demo_sign_view, name='payment_demo_sign'),
+
     # Role-specific views (each role only gets its own)
     re_path(r'^seller/overview/?$', seller_overview_view, name='seller_overview'),
     re_path(r'^seller/products/?$', seller_product_create_view, name='seller_product_create'),
     re_path(r'^commission/?$', commission_view, name='commission_terms'),
     re_path(r'^support/last-address/?$', support_last_address_view, name='support_last_address'),
     re_path(r'^support/memory/?$', assistant_memory_view, name='assistant_memory'),
+    re_path(r'^seller/automation/?$', seller_automation_view, name='seller_automation'),
+    re_path(r'^seller/orders/pack-all/?$', seller_pack_all_view, name='seller_pack_all'),
     re_path(r'^seller/orders/(?P<order_id>[^/]+)/pack/?$', seller_pack_order_view, name='seller_pack_order'),
+    re_path(r'^seller/orders/(?P<order_id>[^/]+)/dispatch/?$', seller_dispatch_order_view, name='seller_dispatch_order'),
+    re_path(r'^seller/orders/(?P<order_id>[^/]+)/deliver/?$', seller_deliver_order_view, name='seller_deliver_order'),
+    re_path(r'^notifications/?$', notifications_view, name='notifications'),
+    re_path(r'^notifications/read/?$', notifications_read_view, name='notifications_read'),
     re_path(r'^seller/orders/(?P<order_id>[^/]+)/route/?$', seller_order_route_view, name='seller_order_route'),
     re_path(r'^admin/sellers/(?P<seller_id>[^/]+)/detail/?$', admin_seller_detail_view, name='admin_seller_detail'),
     re_path(r'^media/product_images/(?P<name>[A-Za-z0-9._-]+)$', serve_photo, name='product_photo'),
@@ -160,6 +175,11 @@ urlpatterns = [
 
     # Seller Applications & Admin Workflow
     re_path(r'^seller/applications/(?P<pk>[^/]+)/product-image/?$', seller_application_product_image_view, name='seller_application_product_image'),
+    re_path(r'^admin/sellers-overview/?$', admin_sellers_overview_view, name='admin_sellers_overview'),
+    re_path(r'^admin/triage/?$', admin_triage_view, name='admin_triage'),
+    re_path(r'^admin/automation/?$', admin_automation_view, name='admin_automation'),
+    re_path(r'^admin/seller-report/?$', admin_seller_report_view, name='admin_seller_report'),
+    re_path(r'^seller/applications/autofill/?$', seller_application_autofill_view, name='seller_application_autofill'),
     re_path(r'^seller/applications/start/?$', seller_application_start_view, name='seller_application_start'),
     re_path(r'^seller/applications/?$', seller_applications_view, name='seller_applications'),
     re_path(r'^seller/applications/(?P<pk>[^/]+)/documents/(?P<doc_id>[^/]+)/file/?$', seller_document_file_view, name='seller_document_file'),

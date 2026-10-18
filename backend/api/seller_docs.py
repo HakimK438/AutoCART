@@ -20,7 +20,7 @@ from .ocr_service import DocumentOCRService, GSTIN_REGEX, PAN_REGEX
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_DOC_TYPES = ['AADHAAR', 'PAN', 'GST_CERTIFICATE', 'ADDRESS_PROOF', 'BANK_PROOF', 'STORE_PHOTO']
+REQUIRED_DOC_TYPES = ['AADHAAR', 'PAN', 'BANK_PROOF']  # everything else (name, address, store) is filled in from these three
 OCR_DOC_TYPES = {'AADHAAR', 'PAN', 'GST_CERTIFICATE', 'ADDRESS_PROOF', 'BANK_PROOF'}
 
 AADHAAR_PLAIN = re.compile(r'(?<![\dXx*])(\d{4})[\s-]?(\d{4})[\s-]?(\d{4})(?!\d)')
@@ -62,10 +62,33 @@ def _images_from_file(path: str, mime: str):
     else:
         img = Image.open(path).convert('RGB')
         longest = max(img.size)
-        if longest > 1400:  # phone photos are huge; OCR does not need them
-            ratio = 1400 / longest
+        if longest > 1100:  # phone photos are huge; OCR does not need them
+            ratio = 1100 / longest
             img = img.resize((int(img.width * ratio), int(img.height * ratio)))
         yield np.array(img)
+
+
+def warm_ocr() -> None:
+    """Load the OCR model in the background when the server starts, so the first upload does not pay for it."""
+    import threading
+
+    def run():
+        try:
+            import numpy as np
+            _get_engine()(np.full((64, 256, 3), 255, dtype='uint8'), use_cls=False)
+        except Exception as exc:  # reading still works, just slower the first time
+            logger.info('OCR warm-up skipped: %s', exc)
+    threading.Thread(target=run, daemon=True, name='ocr-warmup').start()
+
+
+def process_many(jobs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Reads several documents at the same time. jobs = {doc_type: (path, mime)}. Returns {doc_type: process_document result}."""
+    from concurrent.futures import ThreadPoolExecutor
+    if not jobs:
+        return {}
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futures = {t: pool.submit(process_document, t, path, mime) for t, (path, mime) in jobs.items()}
+        return {t: f.result() for t, f in futures.items()}
 
 
 def read_text(path: str, mime: str = '') -> Dict[str, Any]:
@@ -78,7 +101,7 @@ def read_text(path: str, mime: str = '') -> Dict[str, Any]:
     try:
         lines: List[str] = []
         for img in _images_from_file(path, mime):
-            result, _ = engine(img)
+            result, _ = engine(img, use_cls=False)  # the angle classifier is slow and uploaded documents are upright
             lines.extend(item[1] for item in (result or []))
         text = '\n'.join(lines).strip()
         return {'status': 'DONE' if text else 'UNREADABLE', 'text': text}
@@ -168,10 +191,127 @@ def parse_address_proof(text: str) -> Dict[str, Any]:
     return {'pincode': pin.group(1) if pin else None, 'addressSnippet': re.sub(r'\s+', ' ', text)[:200] or None}
 
 
+BANK_NAME_RE = re.compile(r'(?:account\s*holder(?:\s*name)?|a/?c\s*(?:holder\s*)?name|name\s*of\s*(?:the\s*)?(?:account\s*)?holder|customer\s*name|beneficiary(?:\s*name)?|name)\s*[:\-]?\s*(.*)', re.I)
+STATES = ['Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh', 'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand', 'Karnataka',
+          'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab', 'Rajasthan', 'Sikkim', 'Tamil Nadu',
+          'Telangana', 'Tripura', 'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi', 'Jammu and Kashmir', 'Ladakh', 'Chandigarh', 'Puducherry']
+BUSINESS_WORDS = re.compile(r'\b(traders?|trading|enterprises?|stores?|shop|mart|electronics|agency|agencies|pvt|private|ltd|limited|llp|co|company|industries|sons|brothers|bros|retail|wholesale|solutions|services|supplies|centre|center|bazaar|fashions?|boutique|garments|pharma|medicals?)\b', re.I)
+
+
+def lookup_ifsc(ifsc: str) -> Dict[str, Any]:
+    """Bank, branch and city for an IFSC from the free ifsc.razorpay.com service. Returns {} if offline."""
+    try:
+        import requests
+        r = requests.get(f'https://ifsc.razorpay.com/{ifsc}', timeout=2.5)
+        if r.status_code == 200:
+            d = r.json()
+            return {'bankName': d.get('BANK'), 'branch': d.get('BRANCH'), 'bankCity': d.get('CITY'), 'bankState': d.get('STATE')}
+    except Exception:
+        pass
+    return {}
+
+
+def lookup_pin(pin: str) -> Dict[str, Any]:
+    """City and state for a PIN code from the free api.postalpincode.in service. Returns {} if offline or unknown."""
+    try:
+        import requests
+        d = requests.get(f'https://api.postalpincode.in/pincode/{pin}', timeout=2.5).json()[0]
+        if d.get('Status') == 'Success' and d.get('PostOffice'):
+            o = d['PostOffice'][0]
+            return {'city': o.get('District') or o.get('Division'), 'state': o.get('State'), 'area': o.get('Name')}
+    except Exception:
+        pass
+    return {}
+
+
 def parse_bank(text: str) -> Dict[str, Any]:
     ifsc = IFSC_RE.search(text.upper())
     acct = ACCOUNT_RE.search(text)
-    return {'ifsc': ifsc.group(1) if ifsc else None, 'accountLast4': acct.group(1)[-4:] if acct else None}
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    holder = None
+    for i, line in enumerate(lines):
+        m = BANK_NAME_RE.match(line)
+        if not m or not re.search(r'name|holder|beneficiary', line, re.I):
+            continue
+        cand = m.group(1).strip(' :-') or (lines[i + 1] if i + 1 < len(lines) else '')
+        if cand and (_looks_like_name(cand) or (BUSINESS_WORDS.search(cand) and not re.search(r'\d{5,}', cand))):
+            holder = _pretty_name(cand)
+            break
+    bank_line = next((l for l in lines if re.search(r'\bbank\b', l, re.I) and len(l) < 60), None)
+    out = {'ifsc': ifsc.group(1) if ifsc else None, 'accountLast4': acct.group(1)[-4:] if acct else None, 'accountHolder': holder,
+           'bankName': _pretty_name(bank_line) if bank_line else None}
+    if out['ifsc']:
+        for k, v in lookup_ifsc(out['ifsc']).items():
+            if v and (k != 'bankName' or not out['bankName']):
+                out[k] = v
+    return out
+
+
+def parse_aadhaar_address(address: Optional[str]) -> Dict[str, Any]:
+    """Splits an Aadhaar address into street line, city, state and PIN."""
+    if not address:
+        return {}
+    pin = PIN_RE.search(address)
+    text = address[:pin.end()] if pin else address
+    text = re.sub(r'(?i)^\s*(c/o|s/o|d/o|w/o|h/o)[^,]*,\s*', '', text).strip(' ,')
+    state = next((s for s in STATES if re.search(rf'\b{s}\b', text, re.I)), None)
+    info = lookup_pin(pin.group(1)) if pin else {}
+    city = info.get('city')
+    parts = [p.strip() for p in text.split(',') if p.strip()]
+    if parts:
+        parts[-1] = re.sub(r'\s*-?\s*\d{6}\s*$', '', parts[-1]).strip()
+        parts = [p for p in parts if p]
+    if state and parts and parts[-1].lower() == state.lower():
+        parts = parts[:-1]
+    if not city and parts:
+        guess = parts[-1].title()
+        if any(st.lower().startswith(guess.lower()) for st in STATES):  # a cut-off state name is not a city
+            parts = parts[:-1]
+            guess = parts[-1].title() if parts else ''
+        city = guess or None
+    line_parts = [p for p in parts if not city or p.lower() != city.lower()]
+    line = ', '.join(line_parts)
+    for tail in (state, city):  # "12 Hill Road Andheri East Mumbai" -> drop the trailing city/state words
+        if tail:
+            line = re.sub(rf'[\s,]*\b{re.escape(tail)}\b\s*$', '', line, flags=re.I)
+    line = re.sub(r'(?<=[a-z])(?=[A-Z])|(?<=\d)(?=[A-Za-z])|(?<=[a-z])(?=\d)', ' ', line)  # OCR often drops spaces: "12HillRoad" -> "12 Hill Road"
+    return {'addressLine': line[:200] or text[:200], 'city': city, 'state': state or info.get('state'), 'pincode': pin.group(1) if pin else None}
+
+
+def build_autofill(user, app, docs) -> Dict[str, Any]:
+    """Every application field we can fill from the Aadhaar, PAN and bank proof, plus where each value came from.
+    Values are suggestions: the seller can still change any of them."""
+    by = {d.docType: (d.extractedFields or {}) for d in docs if d.ocrStatus == 'DONE'}
+    aad, pan, bank = by.get('AADHAAR', {}), by.get('PAN', {}), by.get('BANK_PROOF', {})
+    fields: Dict[str, Any] = {}
+    src: Dict[str, str] = {}
+
+    def put(key, value, source):
+        if value:
+            fields[key], src[key] = value, source
+
+    names = [(n, s) for n, s in ((pan.get('name'), 'PAN card'), (aad.get('name'), 'Aadhaar'), (bank.get('accountHolder'), 'bank proof')) if n]
+    if names:
+        name, source = names[0]
+        if ' ' not in name:  # OCR ran the words together ("Rahulmohansharma"): use a spaced spelling of the same name from another document
+            name, source = next(((n, s) for n, s in names[1:] if ' ' in n and _names_match(name, n)), (name, source))
+        put('applicantName', name, source)
+    put('pan', pan.get('pan'), 'PAN card')
+    addr = parse_aadhaar_address(aad.get('address'))
+    put('address', addr.get('addressLine'), 'Aadhaar address')
+    put('city', addr.get('city'), 'Aadhaar address')
+    put('addressState', addr.get('state'), 'Aadhaar address')
+    put('pincode', addr.get('pincode') or aad.get('pincode'), 'Aadhaar address')
+    holder = bank.get('accountHolder')
+    if holder and BUSINESS_WORDS.search(holder):
+        put('companyName', holder, 'bank proof (account holder)')
+    elif fields.get('applicantName'):
+        put('companyName', f"{fields['applicantName'].split()[0]} Store", 'suggested from your name, you can rename it')
+    if fields.get('companyName'):
+        fields['storeName'], src['storeName'] = fields['companyName'], src['companyName']
+    put('email', user.email.lower(), 'your account')
+    put('phone', user.phone, 'your account')
+    return {'fields': fields, 'sources': src, 'bank': {k: bank.get(k) for k in ('accountHolder', 'bankName', 'branch', 'ifsc', 'accountLast4') if bank.get(k)}}
 
 
 # ------------------------------------------------------- orchestration -----
@@ -213,7 +353,7 @@ def process_document(doc_type: str, path: str, mime: str = '') -> Dict[str, Any]
     elif doc_type == 'ADDRESS_PROOF':
         fields, wanted = parse_address_proof(text), ('pincode', 'addressSnippet')
     else:
-        fields, wanted = parse_bank(text), ('ifsc', 'accountLast4')
+        fields, wanted = parse_bank(text), ('accountHolder', 'bankName', 'branch', 'ifsc', 'accountLast4')
 
     out['extractedFields'] = {k: fields.get(k) for k in wanted if fields.get(k)}
     out['redactedText'] = DocumentOCRService.redact_sensitive_pii(text)[:1500]
@@ -232,7 +372,7 @@ def _names_match(a: Optional[str], b: Optional[str]) -> bool:
     if _name_tokens(a) & _name_tokens(b):
         return True
     sa, sb = ''.join(sorted(_name_tokens(a))), ''.join(sorted(_name_tokens(b)))
-    ca, cb = ''.join(_name_tokens(a)), ''.join(_name_tokens(b))
+    ca, cb = (re.sub(r'[^a-z0-9]', '', (v or '').lower()) for v in (a, b))  # in order: sets have no order, so they cannot be joined
     for x, y in ((ca, cb), (sa, sb)):
         if len(x) >= 4 and len(y) >= 4 and (x in y or y in x):
             return True
@@ -272,6 +412,13 @@ def compare_application(app, docs) -> Dict[str, Any]:
         else:
             add(label, 'missing', 'Name could not be read')
 
+    bank = by_type.get('BANK_PROOF', {})
+    if bank.get('accountHolder'):
+        ok = _names_match(app.applicantName, bank['accountHolder']) or _names_match(app.companyName, bank['accountHolder'])
+        add('Bank account holder matches the applicant', 'match' if ok else 'mismatch', f"Form '{app.applicantName}', bank '{bank['accountHolder']}'")
+    else:
+        add('Bank account holder matches the applicant', 'missing', 'Account holder name could not be read')
+
     form_pin = (app.pincode or '').strip()
     doc_pin = addr.get('pincode') or aad.get('pincode')
     if form_pin and doc_pin:
@@ -296,6 +443,8 @@ def merge_identity(docs) -> Dict[str, Any]:
         if d.docType == 'PAN' and d.ocrStatus == 'DONE':
             ident.update({'pan': f.get('pan'), 'panName': f.get('name'), 'fatherName': f.get('fatherName')})
             ident.setdefault('dob', f.get('dob'))
+        if d.docType == 'BANK_PROOF' and d.ocrStatus == 'DONE':
+            ident.update({k: f[k] for k in ('accountHolder', 'bankName', 'branch', 'ifsc', 'accountLast4') if f.get(k)})
     return {k: v for k, v in ident.items() if v}
 
 

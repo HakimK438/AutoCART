@@ -1,0 +1,156 @@
+/*
+ * Saathi, the shopping assistant: premium look.
+ * Orange header (the site's brand colour), ivory conversation area, white cards with soft shadows,
+ * one orange action colour (the site's brand), gold only for "top pick". Everything is scoped to .ac-sc so no other page changes.
+ * Loaded after forms.css / pages.css, so these rules win.
+ */
+.ac-sc {
+  --sc-ivory: #faf6f0;
+  --sc-gold: #c9a24b;
+  --sc-gold-soft: #f3e3b8;
+  --sc-card: #ffffff;
+  --sc-hair: rgba(60, 40, 25, .10);
+  --sc-shadow: 0 1px 2px rgba(40, 24, 12, .06), 0 10px 26px -14px rgba(40, 24, 12, .28);
+  width: min(468px, 100%); border-radius: 30px 0 0 30px; overflow: hidden; background: var(--sc-ivory);
+  box-shadow: -24px 0 70px rgba(20, 10, 4, .32);
+}
+@media (max-width: 560px) { .ac-sc { border-radius: 0; width: 100%; } }
+.ac-sc-back { background: rgba(24, 12, 6, .5); backdrop-filter: blur(3px); }
+
+/* ---------- header ---------- */
+.ac-sc-head {
+  position: relative; display: flex; align-items: center; gap: 12px; padding: 18px 18px 18px 20px; border: 0; color: #fff;
+  background: radial-gradient(110% 150% at 100% -30%, rgba(255, 214, 160, .45), transparent 55%), linear-gradient(135deg, #f06a2a 0%, var(--brand) 50%, var(--brand-dark) 100%);
+  box-shadow: 0 10px 24px -14px rgba(var(--shadow-rgb), .9);
+}
+.ac-sc-head::after { content: ''; position: absolute; left: 20px; right: 20px; bottom: 0; height: 1px; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .45), transparent); }
+.ac-sc-avatar { position: relative; flex: none; width: 46px; height: 46px; display: grid; place-items: center; border-radius: 16px; background: #fff; box-shadow: 0 0 0 2px rgba(255, 255, 255, .85), 0 8px 20px -6px rgba(90, 30, 0, .55); }
+.ac-sc-avatar .ac-online { position: absolute; right: -3px; bottom: -3px; width: 13px; height: 13px; border-radius: 50%; background: #22c55e; border: 2.5px solid var(--brand); animation: sc-pulse 2.4s ease-out infinite; }
+@keyframes sc-pulse { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, .55); } 70%, 100% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); } }
+.ac-sc-title { min-width: 0; flex: 1; }
+.ac-sc-title b { display: block; font-family: var(--display); font-size: 21px; line-height: 1.1; letter-spacing: -0.02em; color: #fff; }
+.ac-sc-title small { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.3; color: rgba(255, 255, 255, .9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ac-sc-title small em { font-style: normal; font-weight: 800; color: #fff; }
+.ac-sc-tools { display: flex; align-items: center; gap: 8px; flex: none; }
+.ac-sc-head .ac-sc-x, .ac-sc-tools .ac-sc-x {
+  margin: 0; width: 38px; height: 38px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, .3); background: rgba(255, 255, 255, .16); color: #fff;
+  display: grid; place-items: center; cursor: pointer; transition: background .2s, transform .2s;
+}
+.ac-sc-tools .ac-sc-x:hover { background: rgba(255, 255, 255, .3); transform: translateY(-1px); }
+.ac-sc-tools .ac-sc-x:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* ---------- conversation ---------- */
+.ac-sc-body { background: var(--sc-ivory); padding: 20px 16px 10px; gap: 14px; scrollbar-width: thin; scrollbar-color: rgba(60, 40, 25, .25) transparent; }
+.ac-msgrow { gap: 10px; }
+.ac-msg-ava { margin-top: 0; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 10px; background: #fff; box-shadow: 0 0 0 1px var(--sc-hair); }
+.ac-msg-ava svg { width: 20px; height: 20px; }
+.ac-msg { font-size: 15px; line-height: 1.6; padding: 12px 16px; max-width: 100%; }
+.ac-msg[data-from='bot'] { background: var(--sc-card); border: 0; border-radius: 6px 20px 20px 20px; box-shadow: var(--sc-shadow); color: var(--ink); }
+.ac-msg[data-from='user'] { background: linear-gradient(135deg, var(--brand), var(--brand-dark)); color: #fff; border-radius: 20px 20px 6px 20px; box-shadow: 0 10px 22px -12px rgba(var(--shadow-rgb), .7); }
+.ac-time { display: block; margin: 4px 6px 0; font-size: 11px; letter-spacing: .02em; color: #8c7f74; }
+
+/* ---------- welcome ---------- */
+.ac-welcome { padding: 10px 4px 2px; }
+.ac-welcome h3 { font-size: 30px; line-height: 1.08; margin: 4px 0 10px; }
+.ac-welcome p { font-size: 14.5px; line-height: 1.55; max-width: 38ch; }
+.ac-sugg { gap: 10px; margin-top: 18px; }
+.ac-sugg button { padding: 14px; border: 0; border-radius: 18px; background: var(--sc-card); box-shadow: var(--sc-shadow); gap: 2px; transition: transform .25s var(--ease), box-shadow .25s; }
+.ac-sugg button svg { box-sizing: content-box; width: 20px; height: 20px; padding: 9px; margin-bottom: 8px; border-radius: 12px; background: var(--brand-soft); color: var(--brand); }
+.ac-sugg button b { font-size: 14.5px; }
+.ac-sugg button span { font-size: 12.5px; line-height: 1.35; }
+.ac-sugg button:hover { transform: translateY(-3px); box-shadow: 0 1px 2px rgba(40, 24, 12, .06), 0 16px 30px -14px rgba(40, 24, 12, .38); }
+
+/* ---------- cards ---------- */
+.ac-cardrow { gap: 10px; }
+.ac-mini-card { border: 0; background: var(--sc-card); box-shadow: var(--sc-shadow); border-radius: 22px; }
+.ac-pcard { grid-template-columns: 96px minmax(0, 1fr); gap: 14px; padding: 12px; align-items: start; transition: transform .25s var(--ease), box-shadow .25s; }
+.ac-pcard:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgba(40, 24, 12, .06), 0 18px 34px -16px rgba(40, 24, 12, .36); }
+.ac-pcard-img { position: relative; display: block; width: 96px; height: 96px; border-radius: 16px; overflow: hidden; background: var(--brand-soft); flex: none; }
+.ac-pcard-img img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .5s var(--ease); }
+.ac-pcard:hover .ac-pcard-img img { transform: scale(1.06); }
+.ac-pcard-img em {
+  position: absolute; left: 6px; top: 6px; right: auto; bottom: auto; font-style: normal; font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 99px; background: linear-gradient(135deg, var(--sc-gold-soft), var(--sc-gold)); color: #3b2a07; box-shadow: 0 2px 6px rgba(0, 0, 0, .2); white-space: nowrap;
+}
+.ac-pcard-ph { width: 100%; height: 100%; display: grid; place-items: center; background: linear-gradient(135deg, var(--brand-soft), #fff); color: var(--brand-ink); font-family: var(--display); font-weight: 800; font-size: 30px; }
+.ac-pcard > div b, .ac-ordercard2 b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 14.5px; line-height: 1.32; font-weight: 700; color: var(--ink); }
+.ac-pcard .ac-num { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: 6px; border-radius: 50%; background: var(--brand-dark); color: #fff; font-size: 10.5px; font-weight: 800; vertical-align: 1px; }
+.ac-pcard-price { display: block; margin-top: 5px; font-size: 13px; color: var(--slate); }
+.ac-pcard-price strong { font-family: var(--display); font-size: 18px; letter-spacing: -0.02em; color: var(--ink); }
+.ac-pcard-price s { color: #9a8f86; margin-left: 2px; }
+.ac-pcard-price i { font-style: normal; font-size: 11.5px; font-weight: 800; color: #14633a; background: #dff5e8; padding: 2px 7px; border-radius: 99px; margin-left: 2px; }
+.ac-pcard-meta { display: block; margin-top: 2px; font-size: 12.5px; color: var(--slate); }
+.ac-pcard-near { display: inline-flex; align-items: center; gap: 5px; margin-top: 7px; padding: 4px 9px; border-radius: 99px; background: var(--brand-soft); color: var(--brand-ink); font-size: 11.5px; font-weight: 700; line-height: 1.2; max-width: 100%; }
+.ac-pcard-near svg { flex: none; }
+.ac-pcard .ac-row { align-items: center; }
+.ac-pcard-btn { height: 36px !important; padding: 0 16px !important; font-size: 13.5px !important; font-weight: 700 !important; border-radius: 999px !important; }
+.ac-pcard .ac-btn-blue, .ac-ordercard2 .ac-btn-blue { background: linear-gradient(135deg, var(--brand), var(--brand-dark)); box-shadow: 0 8px 16px -8px rgba(var(--shadow-rgb), .8); }
+.ac-pcard .ac-btn-outline { background: #fff; border: 1.5px solid var(--sc-hair); color: var(--ink); }
+.ac-pcard .ac-btn-outline:hover { border-color: var(--brand); color: var(--brand-ink); }
+.ac-pcard-more { margin-left: auto; font-size: 13px; font-weight: 700; color: var(--brand-ink); text-decoration: underline; text-underline-offset: 3px; }
+
+/* order card */
+.ac-ordercard2 { grid-template-columns: 72px minmax(0, 1fr); gap: 14px; padding: 14px; align-items: start; }
+.ac-ordercard2 .ac-pcard-img { width: 72px; height: 72px; border-radius: 14px; }
+.ac-ordercard2 .ac-pcard-img em { left: 0; right: 0; top: auto; bottom: 0; border-radius: 0; text-align: center; background: rgba(var(--shadow-rgb), .82); color: #fff; box-shadow: none; text-transform: none; letter-spacing: 0; }
+.ac-ordercard2 small { display: block; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase; font-weight: 700; color: #8c7f74; }
+.ac-ordercard2 b { margin: 3px 0 4px; }
+.ac-ord-line { display: block; font-size: 13px; color: var(--slate); }
+.ac-ord-status { font-style: normal; font-weight: 800; font-size: 11.5px; padding: 3px 9px; border-radius: 99px; background: var(--brand-soft); color: var(--brand-ink); margin-right: 6px; }
+.ac-ord-status[data-tone='ok'] { background: #dff5e8; color: #14633a; }
+.ac-ord-status[data-tone='off'] { background: #eee9e3; color: #5c524a; }
+.ac-ord-actions { gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.ac-ordercard2 .ac-steps { margin: 10px 0 0; gap: 4px; }
+.ac-ordercard2 .ac-steps li { font-size: 11px; padding: 3px 9px; }
+
+/* phone card */
+.ac-contactcard { display: grid; gap: 10px; padding: 14px; border: 0; border-radius: 22px; background: linear-gradient(180deg, #fff, #fffaf1); box-shadow: var(--sc-shadow), inset 0 0 0 1px rgba(201, 162, 75, .45); }
+.ac-contactcard > b { display: flex; align-items: center; gap: 7px; font-family: var(--display); font-size: 15.5px; letter-spacing: -0.01em; }
+.ac-contactcard > b svg { color: var(--sc-gold); }
+.ac-contactcard .ac-callcard { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border: 0; border-radius: 16px; background: #fff; box-shadow: inset 0 0 0 1px var(--sc-hair); text-decoration: none; transition: box-shadow .2s, transform .2s; }
+.ac-contactcard .ac-callcard:hover { box-shadow: inset 0 0 0 1.5px var(--brand); transform: translateY(-1px); }
+.ac-contactcard .ac-callicon { width: 36px; height: 36px; border-radius: 12px; background: linear-gradient(135deg, var(--brand), var(--brand-dark)); color: #fff; display: grid; place-items: center; flex: none; }
+.ac-contactcard .ac-callcard b { display: block; font-size: 14.5px; color: var(--ink); }
+.ac-contactcard .ac-callcard small { display: block; margin-top: 1px; font-size: 12.5px; color: var(--slate); }
+
+/* confirm-order box */
+.ac-buybox { border: 0; border-radius: 22px; background: #fff; box-shadow: var(--sc-shadow), inset 0 0 0 1.5px var(--brand); padding: 16px; }
+
+/* ---------- quick replies, typing, rating ---------- */
+.ac-actions-row { display: flex; flex-wrap: nowrap; gap: 8px; overflow-x: auto; margin: 2px -16px 0; padding: 4px 16px 6px; scrollbar-width: none; scroll-snap-type: x proximity; }
+.ac-actions-row::-webkit-scrollbar { display: none; }
+.ac-act { flex: none; scroll-snap-align: start; padding: 9px 15px; border-radius: 999px; border: 0; background: #fff; box-shadow: inset 0 0 0 1.5px var(--sc-hair), 0 1px 2px rgba(40, 24, 12, .05); font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; transition: box-shadow .2s, transform .2s, color .2s; }
+.ac-act:hover { box-shadow: inset 0 0 0 1.5px var(--brand), 0 6px 14px -8px rgba(var(--shadow-rgb), .6); color: var(--brand-ink); transform: translateY(-1px); background: #fff; }
+.ac-typing { padding: 14px 18px; border: 0; border-radius: 6px 20px 20px 20px; box-shadow: var(--sc-shadow); }
+.ac-typing i { background: var(--brand); opacity: .65; }
+.ac-stars { align-self: center; padding: 8px 14px; border-radius: 99px; background: #fff; box-shadow: inset 0 0 0 1px var(--sc-hair); font-size: 12.5px; }
+.ac-stars button { font-size: 20px; color: #d9cdbd; }
+.ac-stars button:hover { color: var(--sc-gold); }
+.ac-handoff { border: 0; border-radius: 22px; box-shadow: var(--sc-shadow); }
+.ac-warn { border-radius: 14px; }
+.ac-jump { box-shadow: var(--sc-shadow); background: #fff; }
+.ac-memory { margin: 0 16px 10px; border-radius: 16px; background: #fff; box-shadow: inset 0 0 0 1px var(--sc-hair); }
+
+/* ---------- footer ---------- */
+.ac-sc-foot { padding: 12px 16px 12px; background: #fff; border-top: 1px solid var(--sc-hair); box-shadow: 0 -14px 28px -22px rgba(40, 24, 12, .5); }
+.ac-sc-form { gap: 10px; align-items: center; }
+.ac-sc-form input { height: 50px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--sc-ivory); box-shadow: inset 0 0 0 1.5px var(--sc-hair); font-size: 15px; transition: box-shadow .2s, background .2s; }
+.ac-sc-form input::placeholder { color: #9a8f86; }
+.ac-sc-form input:focus { outline: 0; background: #fff; box-shadow: inset 0 0 0 2px var(--brand), 0 0 0 5px var(--brand-soft); }
+.ac-sc-send { width: 50px; height: 50px; flex: none; border-radius: 50%; border: 0; background: linear-gradient(135deg, var(--brand), var(--brand-dark)); color: #fff; box-shadow: 0 10px 20px -8px rgba(var(--shadow-rgb), .85); transition: transform .2s, opacity .2s; }
+.ac-sc-send:hover:not(:disabled) { transform: translateY(-1px) scale(1.04); }
+.ac-sc-send:disabled { opacity: .4; box-shadow: none; }
+.ac-sc-links2 { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-top: 10px; }
+.ac-sc-links2 a, .ac-sc-links2 button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--slate); font-size: 12.5px; font-weight: 600; text-decoration: none; white-space: nowrap; cursor: pointer; transition: background .2s, color .2s; }
+.ac-sc-links2 a:hover, .ac-sc-links2 button:hover { background: var(--brand-soft); color: var(--brand-ink); }
+.ac-sc-links2 svg { color: var(--brand); flex: none; }
+.ac-sc-note { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 6px 0 0; font-size: 11px; color: #9a8f86; }
+
+@media (max-width: 380px) {
+  .ac-sc-links2 a, .ac-sc-links2 button { padding: 7px 6px; font-size: 12px; }
+  .ac-pcard { grid-template-columns: 80px minmax(0, 1fr); }
+  .ac-pcard-img { width: 80px; height: 80px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ac-sc, .ac-sc-avatar .ac-online, .ac-pcard, .ac-pcard-img img, .ac-act, .ac-sugg button { animation: none !important; transition: none !important; }
+}

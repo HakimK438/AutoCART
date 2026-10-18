@@ -27,4 +27,11 @@ dist-ssr/
 .idea/
 .DS_Store
 Thumbs.db
-media/
+backend/media/*
+!backend/media/product_images/
+
+# Saathi embedding cache (rebuilt automatically)
+backend/.cache/
+
+# Personal prompt notes (not part of the project)
+PROMPTS.md

@@ -124,3 +124,70 @@
 .ac-armed .ac-rv { opacity: 0; translate: 0 26px; transition: opacity .8s var(--ease), translate .8s var(--ease); transition-delay: calc(var(--i, 0) * 80ms); }
 .ac-armed .ac-rv[data-in='true'] { opacity: 1; translate: 0 0; }
 @media (prefers-reduced-motion: reduce) { .ac-armed .ac-rv { opacity: 1; translate: none; transition: none; } }
+
+/* Chat: letter keys, number picks, call card, order-placed card */
+.ac-key { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; margin-right: 4px; border-radius: 6px; background: var(--brand-soft); color: var(--brand-ink); font-size: 12px; font-weight: 800; }
+.ac-num { display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 6px; border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; font-weight: 800; vertical-align: 1px; }
+.ac-act-num { min-width: 40px; padding: 8px 0; text-align: center; background: var(--brand); color: #fff; border-color: var(--brand); }
+.ac-act-num:hover { background: var(--brand-ink); color: #fff; }
+.ac-callcard { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 14px; background: var(--brand-soft); border: 1.5px solid var(--brand); color: var(--ink); text-decoration: none; }
+.ac-callcard b { display: block; font-size: 16px; }
+.ac-callcard small { color: var(--slate); }
+.ac-callicon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; background: var(--brand); color: #fff; flex: none; }
+.ac-ordercard { border: 2px solid var(--brand); }
+.ac-ordercard span { display: block; font-size: 14px; color: var(--slate); margin-top: 2px; }
+.ac-steps { display: flex; flex-wrap: wrap; gap: 4px 6px; list-style: none; padding: 0; margin: 8px 0; font-size: 12px; }
+.ac-steps li { padding: 3px 8px; border-radius: 999px; background: #f1f1f1; color: var(--slate); }
+.ac-steps li[data-done="true"] { background: var(--brand); color: #fff; font-weight: 700; }
+.ac-buy-img { width: 52px; height: 52px; object-fit: cover; border-radius: 10px; flex: none; }
+.ac-sc-hint { display: block; text-align: center; margin-top: 6px; font-size: 12px; color: var(--slate); }
+.ac-sc-links a { color: var(--brand-ink); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+
+/* Seller onboarding: choose three files, read them together */
+.ac-droptiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.ac-droptile { display: grid; justify-items: center; align-content: start; gap: 6px; text-align: center; padding: 18px 12px; border: 2px dashed var(--line); border-radius: 18px; cursor: pointer; background: #fffdfb; transition: border-color .2s, background .2s, transform .2s; }
+.ac-droptile:hover, .ac-droptile:focus-within { border-color: var(--brand); background: #fff7f1; transform: translateY(-1px); }
+.ac-droptile[data-has='true'] { border-style: solid; border-color: #34a853; background: #f3fbf5; }
+.ac-droptile[data-bad='true'] { border-color: var(--coral); background: #fff5f3; }
+.ac-droptile small { color: var(--slate); font-size: 13px; overflow-wrap: anywhere; }
+.ac-droptile-pic { display: grid; place-items: center; width: 88px; height: 88px; border-radius: 14px; background: #f4f2ee; overflow: hidden; color: var(--brand); }
+.ac-droptile-pic img { width: 100%; height: 100%; object-fit: cover; }
+.ac-droptile-act { margin-top: 4px; font-weight: 700; font-size: 14px; color: var(--brand-ink); }
+.ac-readprog { margin-top: 18px; padding: 16px; border-radius: 16px; background: #fff7f1; }
+.ac-readbar { height: 8px; border-radius: 99px; background: #f1ddd0; overflow: hidden; }
+.ac-readbar i { display: block; height: 100%; background: var(--brand); border-radius: 99px; transition: width .4s ease; }
+.ac-readprog ol { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; font-size: 14px; color: var(--slate); }
+.ac-readprog li[data-on='true'] { color: #1d1d1f; font-weight: 600; }
+.ac-readprog li[data-on='true']::before { content: '✓ '; color: #34a853; }
+.ac-found { margin-top: 20px; }
+.ac-found-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.ac-found-card { padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+.ac-found-card dl { margin: 10px 0 0; display: grid; gap: 6px; font-size: 14px; }
+.ac-found-card dt { color: var(--slate); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.ac-found-card dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.ac-spin { animation: ac-rot 1s linear infinite; }
+@keyframes ac-rot { to { transform: rotate(360deg); } }
+@media (max-width: 760px) { .ac-droptiles, .ac-found-grid { grid-template-columns: 1fr; } }
+
+/* The printable application form */
+.ac-printform { background: #fff; color: #111; border: 1px solid var(--line); border-radius: 18px; padding: 32px; max-width: 800px; margin: 0 auto 24px; }
+.ac-printform header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding-bottom: 16px; border-bottom: 3px solid var(--brand); }
+.ac-pf-brand { display: flex; align-items: center; gap: 12px; }
+.ac-pf-brand div, .ac-pf-ref { display: grid; }
+.ac-pf-brand b { font-size: 24px; letter-spacing: -.02em; }
+.ac-pf-ref { text-align: right; }
+.ac-printform small { color: #555; }
+.ac-printform h3 { margin: 22px 0 8px; font-size: 15px; text-transform: uppercase; letter-spacing: .05em; color: var(--brand-ink); }
+.ac-printform table { width: 100%; border-collapse: collapse; }
+.ac-printform th, .ac-printform td { text-align: left; padding: 7px 10px; border: 1px solid #e4e0da; font-size: 14px; vertical-align: top; }
+.ac-printform th { width: 34%; background: #faf7f3; font-weight: 600; }
+.ac-pf-note { margin: 22px 0 0; font-size: 13px; color: #444; }
+.ac-printform footer { display: flex; justify-content: space-between; gap: 40px; margin-top: 44px; }
+.ac-printform footer div { flex: 1; display: grid; gap: 6px; }
+.ac-printform footer span { border-bottom: 1px solid #111; height: 28px; }
+@media print {
+  body * { visibility: hidden; }
+  .ac-printform, .ac-printform * { visibility: visible; }
+  .ac-printform { position: absolute; left: 0; top: 0; width: 100%; border: 0; border-radius: 0; padding: 0; margin: 0; }
+  .ac-noprint { display: none !important; }
+}

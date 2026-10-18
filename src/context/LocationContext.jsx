@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { AuthContext } from './AuthContext';
 import api from '../services/api';
 import { reverseGeocode } from '../utils/geocode';
 
@@ -130,6 +131,18 @@ export const LocationProvider = ({ children }) => {
       setLoading(false);
     }
   };
+
+  // Signing in asks for the device location once per browser session, so checkout can fill the address by itself.
+  const auth = useContext(AuthContext);
+  const signedIn = !!auth?.token;
+  useEffect(() => {
+    if (!signedIn || location.source !== 'default' || location.permissionStatus === 'denied') return;
+    try {
+      if (sessionStorage.getItem('autocart_loc_asked')) return;
+      sessionStorage.setItem('autocart_loc_asked', '1');
+    } catch { /* storage blocked: ask anyway */ }
+    requestBrowserLocation();
+  }, [signedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <LocationContext.Provider

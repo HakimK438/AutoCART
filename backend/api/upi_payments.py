@@ -35,7 +35,8 @@ def payee_for_items(items):
     if len(companies) != 1 or '' in companies:
         return None, None, 'UPI payment works when the whole order is from one seller. Please pay these items separately or choose another method.'
     company = next(iter(companies))
-    app = SellerApplication.objects.filter(companyName=company, status='APPROVED').first()
+    approved = SellerApplication.objects.filter(companyName=company, status='APPROVED')
+    app = approved.exclude(upiId='').first() or approved.first()  # a company can have more than one login; use the one that has a UPI ID
     if not app or not app.upiId:
         return company, None, f'{company} has not added a UPI ID yet, so UPI payment is not available. Please choose another method.'
     return company, app.upiId, None
@@ -132,6 +133,13 @@ def payment_confirm_view(request, order_id):
         order.status = 'Confirmed'
         order.timeline = [({**t, 'status': 'Payment received', 'completed': True} if t.get('status') == 'Waiting for payment' else t) for t in (order.timeline or [])]
     order.save(update_fields=['paymentStatus', 'status', 'timeline'])
+    if ok:  # a seller who asked for it gets the order packed the moment the money is confirmed
+        try:
+            from .automation import try_auto_pack
+            try_auto_pack(order)
+            order.refresh_from_db()
+        except Exception:  # pragma: no cover
+            pass
     return Response({'orderId': order.id, 'paymentStatus': order.paymentStatus, 'status': order.status})
 
 
@@ -173,7 +181,8 @@ def payments_admin_view(request):
         if o:
             company = payee_for_items(o.items)[0]
             waiting.append({'orderId': o.id, 'customer': o.customerName, 'amount': o.totalAmount, 'utr': pay.providerPaymentId, 'seller': company, 'since': pay.createdAt})
-    return Response({'methods': [{**m, 'amount': round(m['amount'])} for m in methods.values()], 'waiting': waiting})
+    from .order_views import razorpay_summary
+    return Response({'methods': [{**m, 'amount': round(m['amount'])} for m in methods.values()], 'waiting': waiting, 'razorpay': razorpay_summary()})
 
 
 @api_view(['POST'])

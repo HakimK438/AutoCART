@@ -244,9 +244,9 @@ export default function Home() {
               <span className="ac-disc ac-px ac-d1" style={{ '--d': 600 }} />
               <span className="ac-disc ac-px ac-d2" style={{ '--d': 760 }} />
               <span className="ac-disc ac-px ac-d3" style={{ '--d': 880 }} />
-              {view.left && <Link to={`/products/${view.left.id}`} className="ac-fan ac-fan-l ac-px" style={{ '--d': 900 }} aria-label={view.left.name}><img src={sized(firstImage(view.left), 600)} alt={view.left.name} /></Link>}
-              {view.right && <Link to={`/products/${view.right.id}`} className="ac-fan ac-fan-r ac-px" style={{ '--d': 980 }} aria-label={view.right.name}><img src={sized(firstImage(view.right), 600)} alt={view.right.name} /></Link>}
-              <Link to={`/products/${center.id}`} className="ac-fan ac-fan-c ac-px" style={{ '--d': 760 }} aria-label={center.name}><img src={sized(firstImage(center), 800)} alt={center.name} loading="eager" /></Link>
+              {view.left && <Link to={`/products/${view.left.id}`} className="ac-fan ac-fan-l ac-px" style={{ '--d': 900 }} aria-label={view.left.name}><img src={sized(firstImage(view.left), 600)} alt={view.left.name} /><span className="ac-fan-cap">{view.left.name}</span></Link>}
+              {view.right && <Link to={`/products/${view.right.id}`} className="ac-fan ac-fan-r ac-px" style={{ '--d': 980 }} aria-label={view.right.name}><img src={sized(firstImage(view.right), 600)} alt={view.right.name} /><span className="ac-fan-cap">{view.right.name}</span></Link>}
+              <Link to={`/products/${center.id}`} className="ac-fan ac-fan-c ac-px" style={{ '--d': 760 }} aria-label={center.name}><img src={sized(firstImage(center), 800)} alt={center.name} loading="eager" /><span className="ac-fan-cap">{center.name}</span></Link>
 
               <div className="ac-chip ac-c1 ac-px" style={{ '--d': 1250 }}>
                 <div className="ac-chip-in"><b>{Number(center.rating || 0).toFixed(1)} <span className="ac-star">★</span></b><small>{count.format(center.reviewCount || 0)} reviews</small></div>
@@ -256,13 +256,6 @@ export default function Home() {
                   <div className="ac-chip-in"><b>Save {money(savings(center))}</b><small>on this one</small></div>
                 </div>
               )}
-              <div className="ac-chip ac-c2 ac-px" style={{ '--d': 1550 }}>
-                <div className="ac-chip-in">
-                  <small>{center.brand || center.category}</small>
-                  <b>{center.name.length > 28 ? `${center.name.slice(0, 27)}…` : center.name}</b>
-                  <small>{money(center.price)}</small>
-                </div>
-              </div>
             </div>
           ) : state === 'loading' ? (
             <div className="ac-stage-skel ac-skel" style={{ maxWidth: 760, margin: '28px auto 0' }} aria-busy="true" />

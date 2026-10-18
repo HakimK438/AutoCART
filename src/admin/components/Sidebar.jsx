@@ -21,20 +21,13 @@ import {
 
 export const Sidebar = ({ isOpen, onClose }) => {
   const menuItems = [
-    { name: 'Dashboard', path: '/admin', icon: LayoutDashboard, exact: true },
-    { name: 'Products', path: '/admin/products', icon: Package },
-    { name: 'Categories', path: '/admin/categories', icon: FolderTree },
-    { name: 'Orders', path: '/admin/orders', icon: ShoppingBag },
-    { name: 'Users', path: '/admin/users', icon: Users },
+    { name: 'Overview', path: '/admin', icon: LayoutDashboard, exact: true },
     { name: 'Sellers', path: '/admin/sellers', icon: Store },
-    { name: 'Inventory', path: '/admin/inventory', icon: Boxes },
-    { name: 'Reviews', path: '/admin/reviews', icon: MessageSquare },
-    { name: 'Coupons', path: '/admin/coupons', icon: Ticket },
-    { name: 'Analytics', path: '/admin/analytics', icon: BarChart3 },
-    { name: 'Seller applications', path: '/admin/ai-seller-onboarding', icon: BrainCircuit },
-    { name: 'Support inbox', path: '/admin/support', icon: LifeBuoy },
-    { name: 'Enquiries', path: '/admin/enquiries', icon: HelpCircle },
-    { name: 'Payments', path: '/admin/payments', icon: CreditCard },
+    { name: 'Orders and payments', path: '/admin/orders', icon: ShoppingBag },
+    { name: 'Products', path: '/admin/products', icon: Package },
+    { name: 'Customers', path: '/admin/users', icon: Users },
+    { name: 'Customer care', path: '/admin/support', icon: LifeBuoy },
+    { name: 'Reports and offers', path: '/admin/reports', icon: BarChart3 },
     { name: 'Settings', path: '/admin/settings', icon: Settings },
   ];
 
@@ -64,7 +57,7 @@ export const Sidebar = ({ isOpen, onClose }) => {
                 Auto<span className="text-indigo-600">Admin</span>
               </span>
               <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest -mt-1">
-                Dashboard v1.0
+                Admin console
               </span>
             </div>
           </Link>

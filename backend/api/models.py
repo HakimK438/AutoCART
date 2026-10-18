@@ -259,6 +259,7 @@ class SellerApplication(models.Model):
     yearsInBusiness = models.CharField(max_length=20, blank=True, default='0')
     status = models.CharField(max_length=40, choices=STATUS_CHOICES, default='SUBMITTED')
     upiId = models.CharField(max_length=80, blank=True, default='')  # where customers' UPI payments go (set by the seller)
+    autoPackOrders = models.BooleanField(default=False)  # autopilot: confirm and pack new orders as soon as they are payable (set by the seller)
     riskScore = models.IntegerField(default=0)
     riskCategory = models.CharField(max_length=30, default='Low') # Low, Medium, High
     documentUploads = models.JSONField(default=dict, blank=True) # { docType: { url, fileName, uploadedAt, mimeType } }
@@ -522,3 +523,40 @@ class UserMemory(models.Model):
     recentSearches = models.JSONField(default=list, blank=True)  # last few things they searched for
     chatCount = models.IntegerField(default=0)
     updatedAt = models.DateTimeField(auto_now=True)
+
+
+# ==================== NOTIFICATIONS ====================
+
+class Notification(models.Model):
+    """A message for one signed-in user, shown under the bell in the header. Today: order updates (packed, on the way, delivered)."""
+    userEmail = models.EmailField(db_index=True)
+    kind = models.CharField(max_length=30, default='order')
+    title = models.CharField(max_length=150)
+    body = models.TextField(blank=True, default='')
+    orderId = models.CharField(max_length=64, blank=True, default='')
+    read = models.BooleanField(default=False)
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-createdAt', '-id']
+
+    def __str__(self):
+        return f"{self.userEmail}: {self.title}"
+
+
+# ==================== AUTOPILOT ====================
+
+class AutomationEvent(models.Model):
+    """One thing the platform did by itself (packed an order, restocked a product, approved an application), so people can see and trust it."""
+    scope = models.CharField(max_length=10, default='seller', db_index=True)   # 'seller' or 'admin'
+    ownerId = models.CharField(max_length=64, blank=True, default='', db_index=True)  # the seller's user id; empty for admin events
+    kind = models.CharField(max_length=30)       # auto_pack, pack_all, auto_restock, auto_approve, auto_reminder
+    summary = models.CharField(max_length=300)
+    refId = models.CharField(max_length=64, blank=True, default='')
+    createdAt = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-createdAt', '-id']
+
+    def __str__(self):
+        return f"{self.kind}: {self.summary}"

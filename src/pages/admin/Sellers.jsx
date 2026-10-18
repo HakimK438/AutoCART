@@ -1,119 +1,109 @@
-import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
-import { Search, Store, X, ChevronRight } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Search, Mail, Phone, Inbox, Boxes, ChevronRight, Store, ShieldCheck, Clock } from 'lucide-react';
 import api from '../../services/api';
 import adminService from '../../services/adminService';
-import Badge from '../../components/common/Badge';
 import formatPrice from '../../utils/formatPrice';
+import { downloadCsv } from '../../utils/csv';
 import Loader from '../../components/common/Loader';
-import SellerProfileView, { RiskBadge } from './SellerProfileView';
+import { StatCard, Pill, ExportButton } from '../../admin/components/ui';
+import SellerDetailModal from './SellerDetailModal';
+import SellerDP from './SellerDP';
 
-const Stat = ({ n, label: l, warn }) => (
-  <div className={`rounded-xl border p-3 ${warn ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'}`}><div className="text-2xl font-extrabold tabular-nums text-gray-900">{n}</div><div className="text-xs text-gray-500">{l}</div></div>
-);
+const FILTERS = [['', 'All sellers'], ['Pending', 'Waiting for approval']];  // only the two that matter
+const TONE = { Approved: 'bg-green-100 text-green-800', Pending: 'bg-amber-100 text-amber-800', Suspended: 'bg-gray-200 text-gray-800', Rejected: 'bg-red-100 text-red-800' };
 
-/** All sellers. Click a row to see the seller's contact, live numbers and the documents they were approved with. */
+/** Seller profiles: every seller as a card (name and product total up front); open one for everything about them. Same layout as Seller onboarding. */
 export const Sellers = () => {
   const [sellerList, setSellerList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [detail, setDetail] = useState(null); // { loading } | data
-  const [err, setErr] = useState('');
+  const [status, setStatus] = useState('');
+  const [selected, setSelected] = useState(null);
+  const [params] = useSearchParams();
 
   useEffect(() => {
     (async () => {
-      setLoading(true);
-      try { setSellerList(await adminService.getAllSellers()); } finally { setLoading(false); }
+      try {
+        const { data } = await api.get('/admin/sellers-overview');  // live product counts, not the figures stored with each seller
+        setSellerList(data.sellers.map((s) => ({ ...s, productsCount: s.products })));
+      } catch { setSellerList(await adminService.getAllSellers()); } finally { setLoading(false); }
     })();
   }, []);
 
-  const openSeller = async (id) => {
-    setErr(''); setDetail({ loading: true });
-    try { setDetail((await api.get(`/admin/sellers/${id}/detail`)).data); } catch { setDetail(null); setErr('Could not open that seller.'); }
-  };
+  const rows = useMemo(() => sellerList
+    .filter((s) => !status || s.status === status)
+    .filter((s) => `${s.name} ${s.companyName} ${s.city}`.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a, b) => b.productsCount - a.productsCount || a.name.localeCompare(b.name)), [sellerList, status, search]);
 
-  const filtered = sellerList.filter((s) => `${s.name} ${s.companyName}`.toLowerCase().includes(search.toLowerCase()));
+  const openSeller = (id) => setSelected(id);
+  const close = useCallback(() => setSelected(null), []);
+
+  // A link from elsewhere (?open=seller-1) opens that seller straight away.
+  useEffect(() => {
+    const wanted = params.get('open');
+    if (wanted && sellerList.some((s) => s.id === wanted)) openSeller(wanted);
+  }, [sellerList]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (loading) return <Loader fullScreen text="Loading sellers directory..." />;
-  const d = detail && !detail.loading ? detail : null;
+  const count = (key) => (key ? sellerList.filter((s) => s.status === key).length : sellerList.length);
+  const totalProducts = sellerList.reduce((n, s) => n + (s.productsCount || 0), 0);
+  const inMumbai = sellerList.filter((s) => s.city === 'Mumbai').length;
+
+  const exportCsv = () => downloadCsv('sellers', [
+    ['Seller', (s) => s.name], ['Store / company', (s) => s.companyName], ['City', (s) => s.city], ['Status', (s) => s.status],
+    ['Products listed', (s) => s.productsCount], ['Units sold', (s) => s.unitsSold], ['Item sales (INR)', (s) => s.revenue], ['Email', (s) => s.email], ['Phone', (s) => s.phone],
+  ], rows);
 
   return (
-    <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-extrabold text-gray-900 tracking-tight">Sellers</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Click a seller to see their details, documents and live numbers. Approvals and rejections happen in Seller applications.</p>
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" aria-label="Seller totals">
+        <StatCard icon={Store} label="Sellers in Mumbai" value={inMumbai} hint={`${sellerList.length} sellers on AutoCart`} tone="indigo" />
+        <StatCard icon={Boxes} label="Products listed" value={totalProducts.toLocaleString('en-IN')} hint="Across every seller" tone="indigo" />
+        <StatCard icon={ShieldCheck} label="Approved" value={count('Approved')} hint="Selling now" tone="emerald" />
+        <StatCard icon={Clock} label="Pending" value={count('Pending')} hint="Waiting for a decision" tone="amber" />
       </div>
-      {err && <div role="alert" className="px-4 py-3 rounded-xl bg-red-50 text-red-800 text-sm">{err}</div>}
 
-      <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-        <div className="relative w-full sm:w-80">
-          <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search sellers by store name..." aria-label="Search sellers"
-            className="w-full pl-9 pr-4 py-2 text-sm border rounded-lg focus:ring-1 focus:ring-indigo-500 focus:outline-none" />
-          <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+      <div className="flex gap-2 flex-wrap items-center justify-between">
+        <div className="flex gap-2 flex-wrap">
+          {FILTERS.map(([key, name]) => <Pill key={key || 'all'} active={status === key} onClick={() => setStatus(key)}>{name} <span className="opacity-70">({count(key)})</span></Pill>)}
         </div>
+        <ExportButton onClick={exportCsv} disabled={!rows.length} />
       </div>
 
-      <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
-          <thead className="bg-gray-50 font-bold uppercase text-gray-500 tracking-wider text-xs">
-            <tr><th className="px-4 py-3">Store / Company</th><th className="px-4 py-3">City</th><th className="px-4 py-3">Products</th><th className="px-4 py-3">Orders*</th><th className="px-4 py-3">Revenue*</th><th className="px-4 py-3">Status</th><th className="px-4 py-3" /></tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200 font-medium text-gray-700">
-            {filtered.map((sel) => (
-              <tr key={sel.id} onClick={() => openSeller(sel.id)} onKeyDown={(e) => e.key === 'Enter' && openSeller(sel.id)} tabIndex={0} role="button" aria-label={`Open ${sel.name}`}
-                className="hover:bg-indigo-50 cursor-pointer transition focus:outline-none focus:bg-indigo-50">
-                <td className="px-4 py-3"><p className="font-bold text-gray-900 flex items-center gap-1.5"><Store className="w-4 h-4 text-indigo-600" /> {sel.name}</p><p className="text-xs text-gray-400">{sel.companyName}</p></td>
-                <td className="px-4 py-3">{sel.city}</td>
-                <td className="px-4 py-3 font-bold">{sel.productsCount}</td>
-                <td className="px-4 py-3 font-bold">{sel.ordersCount}</td>
-                <td className="px-4 py-3 font-bold text-gray-900">{formatPrice(sel.totalRevenue)}</td>
-                <td className="px-4 py-3"><Badge variant={sel.status === 'Approved' ? 'green' : 'yellow'}>{sel.status}</Badge></td>
-                <td className="px-4 py-3 text-right text-indigo-600 font-bold whitespace-nowrap">Details <ChevronRight className="inline w-4 h-4" /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="relative max-w-md">
+        <Search className="w-4 h-4 text-gray-400 absolute left-3.5 top-1/2 -translate-y-1/2" aria-hidden="true" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, store or city" aria-label="Search sellers" className="w-full pl-10 pr-3 py-2.5 rounded-xl bg-white border border-gray-200 text-sm shadow-sm" />
       </div>
-      <p className="text-xs text-gray-500">* Orders and revenue in this list are sample figures stored with each seller. Open a seller to see live numbers worked out from real orders.</p>
 
-      {detail && (
-        <div className="fixed inset-0 z-[80] flex justify-end bg-black/40" onClick={() => setDetail(null)} role="dialog" aria-modal="true" aria-label="Seller details">
-          <div className="w-full max-w-4xl h-full overflow-y-auto bg-slate-50 p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-2xl font-extrabold text-gray-900">{d?.seller.companyName || d?.seller.name || 'Loading…'}</h2>
-                {d && <p className="text-sm text-gray-600">Seller ID {d.seller.id} · {d.seller.name} · {d.seller.city || 'no city'} · {d.seller.status}{d.seller.joinedDate ? ` · joined ${d.seller.joinedDate}` : ''}</p>}
-                {d && <p className="text-sm text-gray-600">{[d.seller.email, d.seller.phone].filter(Boolean).join(' · ') || 'No contact details saved'}</p>}
-              </div>
-              <button onClick={() => setDetail(null)} aria-label="Close" className="p-2 rounded-lg hover:bg-gray-200"><X className="w-5 h-5" /></button>
+      <div className="space-y-3" role="list" aria-label="Sellers">
+        {rows.length === 0 && <div className="bg-white rounded-2xl border border-dashed border-gray-300 p-12 text-center text-sm text-gray-500"><Inbox className="w-9 h-9 mx-auto mb-2 text-gray-300" />No sellers match.</div>}
+        {rows.map((s) => (
+          <button key={s.id} role="listitem" onClick={() => openSeller(s.id)} aria-label={`Open ${s.name}, ${s.productsCount} products`}
+            className="group w-full text-left bg-white rounded-2xl border border-gray-200 px-5 py-4 flex items-center gap-4 shadow-sm hover:shadow-md hover:border-indigo-300 hover:-translate-y-0.5 transition">
+            <SellerDP name={s.name} size={56} />
+            <div className="min-w-0 flex-1 basis-56">
+              <b className="text-gray-900 text-lg block truncate">{s.name}</b>
+              <div className="text-sm text-gray-500 truncate">{s.companyName} · {s.city || 'No city'}</div>
             </div>
-            {!d && <div className="p-10 text-center text-gray-500">Loading…</div>}
-            {d && (
-              <>
-                <section aria-label="Live numbers">
-                  <h3 className="font-bold text-gray-900 mb-2">Live numbers (from real orders)</h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                    <Stat n={d.live.products} label="Products live" /><Stat n={d.live.orders} label="Orders with their items" /><Stat n={formatPrice(d.live.revenue)} label="Item sales" />
-                    <Stat n={formatPrice(d.live.commission)} label="AutoCart commission" /><Stat n={d.live.lowStock + d.live.outOfStock} label="Low or out of stock" warn={d.live.outOfStock > 0} />
-                  </div>
-                </section>
-                {d.products.length > 0 && (
-                  <section className="bg-white rounded-2xl border border-gray-200 p-4">
-                    <h3 className="font-bold text-gray-900 mb-2">Products</h3>
-                    <ul className="divide-y divide-gray-100 text-sm">{d.products.map((x) => <li key={x.id} className="flex justify-between py-1.5"><span className="truncate pr-3">{x.name}</span><span className="text-gray-600 whitespace-nowrap">{formatPrice(x.price)} · {x.stock} in stock</span></li>)}</ul>
-                  </section>
-                )}
-                {d.application ? (
-                  <>
-                    <div className="flex items-center gap-3 flex-wrap"><h3 className="font-bold text-gray-900">Onboarding application</h3><RiskBadge score={d.application.riskScore} category={(d.application.documents || []).length < 2 ? 'Incomplete' : d.application.riskCategory} size="sm" />
-                      <Link to="/admin/ai-seller-onboarding" className="text-sm font-bold text-indigo-600 underline">Open in Seller applications to decide</Link></div>
-                    <SellerProfileView p={d.application} />
-                  </>
-                ) : <section className="bg-white rounded-2xl border border-dashed border-gray-300 p-6 text-sm text-gray-600">No onboarding application is linked to this seller. They were added directly (sample data), so there are no Aadhaar, PAN or location records to show.</section>}
-              </>
-            )}
-          </div>
-        </div>
-      )}
+            <div className="hidden md:block min-w-0 w-60 text-sm text-gray-600">
+              {s.email && <div className="flex items-center gap-1.5 truncate"><Mail className="w-3.5 h-3.5 text-gray-400 shrink-0" />{s.email}</div>}
+              {s.phone && <div className="flex items-center gap-1.5 mt-0.5"><Phone className="w-3.5 h-3.5 text-gray-400 shrink-0" />{s.phone}</div>}
+            </div>
+            <div className="flex flex-col items-center justify-center rounded-xl bg-indigo-50 border border-indigo-100 px-4 py-2 min-w-[92px]">
+              <span className="text-2xl font-extrabold text-indigo-700 tabular-nums leading-none">{s.productsCount}</span>
+              <span className="text-[11px] font-semibold text-indigo-600 mt-1">{s.productsCount === 1 ? 'product' : 'products'}</span>
+            </div>
+            <div className="hidden sm:flex flex-col items-start gap-1.5 w-28">
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${TONE[s.status] || TONE.Pending}`}>{s.status}</span>
+              {s.revenue > 0 && <span className="text-xs text-gray-500">{formatPrice(s.revenue)} sold</span>}
+            </div>
+            <ChevronRight className="w-5 h-5 text-gray-300 group-hover:text-indigo-600 shrink-0" aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+
+      {selected && <SellerDetailModal id={selected} onClose={close} />}
     </div>
   );
 };

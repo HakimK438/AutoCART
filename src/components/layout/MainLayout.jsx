@@ -5,6 +5,8 @@ import { Sparkles } from 'lucide-react';
 import StoreHeader from '../../storefront/StoreHeader';
 import StoreFooter from '../../storefront/StoreFooter';
 import SupportChat from '../../storefront/SupportChat';
+import MunimChat from '../../storefront/MunimChat';
+import { useAuth } from '../../hooks/useAuth';
 import '../../storefront/storefront.css';
 import '../../storefront/forms.css';
 
@@ -16,6 +18,8 @@ import '../../storefront/forms.css';
 export const MainLayout = ({ children }) => {
   const { pathname } = useRoute();
   const [chatOpen, setChatOpen] = useState(false);
+  const { user } = useAuth();
+  const isSeller = user?.role === 'SELLER'; // sellers get Munim (sales and stock) instead of the shopper assistant
 
   // Any page can ask for the assistant with openAssistant() (see storefront/parts.jsx).
   useEffect(() => {
@@ -41,10 +45,14 @@ export const MainLayout = ({ children }) => {
 
       <div className="ac ac-host">
         <BuyGate />
-        <button className="ac-chat" onClick={() => setChatOpen(true)} aria-label="Open Saathi, the AutoCart shopping assistant">
-          <Sparkles size={20} /><span>Ask Saathi</span>
-        </button>
-        <SupportChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+        {isSeller ? <MunimChat /> : (
+          <>
+            <button className="ac-chat" onClick={() => setChatOpen(true)} aria-label="Open Saathi, the AutoCart shopping assistant">
+              <Sparkles size={20} /><span>Ask Saathi</span>
+            </button>
+            <SupportChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+          </>
+        )}
       </div>
     </div>
   );

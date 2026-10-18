@@ -21,7 +21,7 @@ from rest_framework.response import Response
 from .seller_analytics import analytics
 from .product_images import save_photo
 from .stock_rules import history as stock_history
-from .models import Payment, StockLog, Enquiry, Order, Payment, Product, SellerApplication, SupportTicket
+from .models import Payment, StockLog, Enquiry, Order, Payment, Product, SellerApplication, Store, SupportTicket
 from .views import get_user_from_token
 
 ADMIN_ROLES = ('ADMIN', 'STAFF')
@@ -56,22 +56,39 @@ def seller_overview_view(request):
     by_id = {p.id: p for p in products}
 
     orders, revenue, units = [], 0.0, 0
+    delivered_orders, delivered_revenue = 0, 0.0
+    sold = {}  # product id -> {'units', 'orders', 'last', 'open'}: has anybody bought it, and is an order still to be packed
     for o in Order.objects.exclude(status='Cancelled').order_by('-date', '-id'):
         mine = [i for i in (o.items or []) if str(i.get('id')) in ids]
         if not mine:
             continue
         share = sum(float(i.get('price') or 0) * int(i.get('quantity') or 0) for i in mine)
+        for i in mine:
+            e = sold.setdefault(str(i.get('id')), {'units': 0, 'orders': 0, 'last': '', 'open': 0, 'buyers': []})
+            if len(e['buyers']) < 3:
+                e['buyers'].append({'orderId': o.id, 'name': o.customerName, 'phone': o.customerPhone, 'quantity': int(i.get('quantity') or 0), 'date': o.date, 'status': o.status})
+            e['units'] += int(i.get('quantity') or 0)
+            e['orders'] += 1
+            e['last'] = e['last'] or o.date  # newest first
+            e['open'] += 1 if o.status not in ('Delivered', 'Completed', 'Returned') else 0
         revenue += share
         units += sum(int(i.get('quantity') or 0) for i in mine)
+        if o.status in ('Delivered', 'Completed'):
+            delivered_orders += 1
+            delivered_revenue += share
         orders.append({'id': o.id, 'date': o.date, 'status': o.status, 'paymentStatus': o.paymentStatus, 'paymentMethod': o.paymentMethod,
-                       'customerFirstName': (o.customerName or 'Customer').split()[0], 'items': [{'name': i.get('name'), 'quantity': i.get('quantity')} for i in mine],
-                       'yourShare': round(share), 'canPack': o.status in ('Confirmed', 'Processing', 'Pending', 'Order Placed') and not (o.paymentMethod == 'UPI (Scan & Pay)' and o.paymentStatus != 'Paid'),
+                       'customerFirstName': (o.customerName or 'Customer').split()[0], 'customerName': o.customerName, 'customerPhone': o.customerPhone,
+                       'deliveryAddress': ', '.join(str(x) for x in ((o.shippingAddress or {}).get(k) for k in ('flat', 'addressLine', 'landmark', 'city', 'state', 'pinCode')) if x) or ((o.shippingAddress or {}).get('storeName') and f"Pickup at {o.shippingAddress['storeName']}") or '', 'items': [{'name': i.get('name'), 'quantity': i.get('quantity')} for i in mine],
+                       'yourShare': round(share), 'canPack': o.status in ('Confirmed', 'Processing', 'Pending', 'Order Placed') and not (o.paymentMethod in ('UPI (Scan & Pay)', 'Razorpay (Test Mode)') and o.paymentStatus != 'Paid'),
+                       'canDispatch': o.status == 'Packed', 'canDeliver': o.status in ('Out for Delivery', 'Ready for Pickup'),
                        'utr': (Payment.objects.filter(orderId=o.id, provider='upi').exclude(status='FAILED').values_list('providerPaymentId', flat=True).first() or ''), 'pickup': bool((o.shippingAddress or {}).get('storeName')) and not (o.shippingAddress or {}).get('addressLine')})
 
     open_questions = Enquiry.objects.filter(sellerName=company, status='OPEN').count()
     low = [p for p in products if 0 < p.stock <= LOW_STOCK]
     out = [p for p in products if p.stock <= 0]
     tips = []
+    if not products:
+        tips.append({'level': 'warn', 'text': 'You have no products yet. Add your first one in the Products tab: a name, a price, the units in stock and a photo. It goes live in the store straight away.'})
     if out:
         tips.append({'level': 'warn', 'text': f"{len(out)} of your products are out of stock, so shoppers cannot buy them: {', '.join(p.name for p in out[:2])}."})
     if low:
@@ -81,13 +98,29 @@ def seller_overview_view(request):
     if not tips:
         tips.append({'level': 'good', 'text': 'Everything looks healthy. Stock is fine and no questions are waiting.'})
 
+    from .models import SellerApplication
+    app = SellerApplication.objects.filter(companyName=company, status='APPROVED').first() or SellerApplication.objects.filter(ownerUserId=user.id).exclude(status='REJECTED').first()
+    store = Store.objects.filter(seller=company).first()
+    profile = {
+        'ownerName': user.name, 'company': company, 'storeName': (app.storeName if app else '') or (store.name if store else '') or company,
+        'email': user.email, 'phone': (app.phone if app else '') or user.phone or (store.phone if store else ''),
+        'address': (app.address if app else '') or (store.address if store else ''), 'city': (app.city if app else '') or (store.city if store else ''),
+        'pincode': (app.pincode if app else '') or (store.pincode if store else ''), 'state': (app.addressState if app else ''),
+        'lat': (app.storeLatitude if app and app.storeLatitude else None) or (store.latitude if store and store.latitude else None),
+        'lng': (app.storeLongitude if app and app.storeLongitude else None) or (store.longitude if store and store.longitude else None),
+        'status': 'Approved' if (app and app.status == 'APPROVED') or store else (app.status if app else ''),
+    }
     return Response({
         **analytics(products),
+        'profile': profile,
         'company': company, 'productsCount': len(products), 'outOfStock': len(out), 'lowStock': len(low), 'openQuestions': open_questions,
-        'ordersCount': len(orders), 'unitsSold': units, 'revenue': round(revenue), 'tips': tips, 'orders': orders[:25],
+        'ordersCount': len(orders), 'unitsSold': units, 'revenue': round(revenue), 'deliveredOrders': delivered_orders, 'deliveredRevenue': round(delivered_revenue), 'tips': tips, 'orders': orders[:25],
         'products': [{'id': p.id, 'name': p.name, 'price': p.price, 'originalPrice': p.originalPrice, 'stock': p.stock, 'rating': p.rating,
                       'reviewCount': p.reviewCount, 'image': (p.images or [''])[0], 'category': p.category,
-                      'autoRestock': p.autoRestock, 'reorderLevel': p.reorderLevel, 'restockQty': p.restockQty, 'costPrice': p.costPrice} for p in products],
+                      'autoRestock': p.autoRestock, 'reorderLevel': p.reorderLevel, 'restockQty': p.restockQty, 'costPrice': p.costPrice,
+                      'unitsSold': sold.get(p.id, {}).get('units', 0), 'orderCount': sold.get(p.id, {}).get('orders', 0),
+                      'lastBought': sold.get(p.id, {}).get('last', ''), 'openOrders': sold.get(p.id, {}).get('open', 0), 'buyers': sold.get(p.id, {}).get('buyers', []),
+                      'stockStatus': 'Out of stock' if p.stock <= 0 else 'Low stock' if p.stock <= LOW_STOCK else 'In stock'} for p in products],
     })
 
 

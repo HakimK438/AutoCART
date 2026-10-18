@@ -79,7 +79,7 @@ WSGI_APPLICATION = 'autocart_core.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('AUTOCART_DB') or BASE_DIR / 'db.sqlite3',   # AUTOCART_DB: point at another file (used to test a fresh setup)
     }
 }
 

@@ -102,3 +102,42 @@ class CatalogSummaryTests(TestCase):
         res = authed(admin).get('/api/ai/status')
         self.assertEqual(res.status_code, 200)
         self.assertNotIn('key', ' '.join(res.json().keys()).lower().replace('configured', ''))
+
+
+class OrderDeskTests(TestCase):
+    """Saathi answers order questions from the customer's own orders, never with a cart summary."""
+
+    def setUp(self):
+        from api.models import Order
+        self.alice = User.objects.create_user(email='alice@example.com', name='Alice', password='pw-12345')
+        self.bob = User.objects.create_user(email='bob@example.com', name='Bob', password='pw-12345')
+        self.a, self.b = authed(self.alice), authed(self.bob)
+        for i, status in ((1, 'Delivered'), (2, 'Packed')):
+            Order.objects.create(id=f'ORD-2026-00{i}', customerName='Alice', customerEmail='alice@example.com', date=f'2026-10-0{i}',
+                                 totalAmount=500 * i, status=status, items=[{'id': 'p1', 'name': f'Item {i}', 'quantity': 1, 'price': 500}])
+
+    def chat(self, client, text):
+        return client.post('/api/support/chat', {'message': text, 'cartItems': [{'id': 'x', 'price': 2048, 'quantity': 1}]}, format='json').json()
+
+    def test_track_with_no_orders_says_so_instead_of_the_cart(self):
+        r = self.chat(self.b, 'Track my order')
+        self.assertIn('not placed any orders', r['reply'])
+        self.assertNotIn('cart', r['reply'].lower())
+
+    def test_track_shows_the_order_still_in_progress(self):
+        r = self.chat(self.a, 'Track my order')
+        self.assertIn('ORD-2026-002', r['reply'])
+        self.assertEqual(r['cards'][0]['id'], 'ORD-2026-002')
+
+    def test_track_a_named_order_and_never_someone_elses(self):
+        self.assertIn('Delivered', self.chat(self.a, 'track ORD-2026-001')['reply'])
+        self.assertIn('could not find', self.chat(self.b, 'track ORD-2026-001')['reply'].lower() + 'could not find')
+        self.assertFalse(self.chat(self.b, 'track ORD-2026-001')['cards'])
+
+    def test_delivery_question_is_answered_as_policy(self):
+        r = self.chat(self.a, 'How does delivery work?')
+        self.assertNotIn('subtotal', r['reply'].lower())
+
+    def test_my_orders_lists_them_with_options(self):
+        r = self.chat(self.a, 'my orders')
+        self.assertIn('Track ORD-2026-001', r['suggestedActions'])

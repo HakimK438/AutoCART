@@ -44,15 +44,15 @@ export default function BuyGate() {
         {guest ? (
           <>
             <h2>Sign in to buy</h2>
-            <p className="ac-muted">Use your customer account to add items and check out. It only takes a moment.</p>
-            <button className="ac-btn ac-btn-blue" onClick={() => go('/login')}>Sign in as a customer</button>
-            <button className="ac-btn ac-btn-outline" onClick={() => go('/register')}>Create a customer account</button>
+            <p className="ac-muted">Sign in to add items and check out. It only takes a moment.</p>
+            <button className="ac-btn ac-btn-blue" onClick={() => go('/login')}>Sign in</button>
+            <button className="ac-btn ac-btn-outline" onClick={() => go('/register')}>Create an account</button>
           </>
         ) : (
           <>
-            <h2>Buying is for customer accounts</h2>
-            <p className="ac-muted">You are signed in as {open.role === 'SELLER' ? 'a seller' : 'an administrator'}. Seller and admin accounts cannot place orders. To shop, sign out and use a customer account.</p>
-            <button className="ac-btn ac-btn-blue" onClick={() => { logout(); go('/login'); }}>Sign out and shop as a customer</button>
+            <h2>Administrators cannot shop</h2>
+            <p className="ac-muted">You are signed in as an administrator, and admin accounts cannot place orders. Sign out to shop with a customer or seller account.</p>
+            <button className="ac-btn ac-btn-blue" onClick={() => { logout(); go('/login'); }}>Sign out and shop</button>
             <button className="ac-btn ac-btn-outline" onClick={() => setOpen(null)}>Stay here</button>
           </>
         )}

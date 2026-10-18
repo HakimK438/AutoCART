@@ -8,6 +8,7 @@ Rules:
 - The assistant hands over to a person when asked, when the customer is upset, or when it cannot help.
 """
 
+import os
 import re
 import uuid
 import datetime
@@ -21,7 +22,7 @@ from rest_framework.response import Response
 
 from .agents.engine import AgentEngine
 from .notify import send_email
-from . import agent_graph
+from . import agent_graph, nlu, order_chat, product_qa
 from .assistant_memory import first_name, learn, memory_note, personalise
 
 from .models import ChatMessage, ChatSession, Order, SupportTicket, TicketMessage, UserMemory
@@ -29,6 +30,7 @@ from .views import get_user_from_token
 
 ADMIN_ROLES = ('ADMIN', 'STAFF')
 orchestrator = AgentEngine()
+SUPPORT_PHONE, SUPPORT_HOURS = product_qa.SUPPORT_PHONE, product_qa.SUPPORT_HOURS
 
 HUMAN_WORDS = [
     'human', 'real person', 'agent', 'representative', 'talk to someone', 'speak to someone', 'manager', 'customer care',
@@ -81,19 +83,24 @@ def _due(priority: str):
 
 
 def _cards(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if result.get('cards'):  # the order desk builds its own cards
+        return result['cards']
     cards: List[Dict[str, Any]] = []
     for p in (result.get('products') or [])[:4]:
         images = p.get('images') or []
         cards.append({
             'type': 'product', 'id': p.get('id'), 'name': p.get('name'), 'price': p.get('price'),
-            'originalPrice': p.get('originalPrice'), 'rating': p.get('rating'), 'stock': p.get('stock'),
-            'image': images[0] if images else '',
+            'originalPrice': p.get('originalPrice'), 'rating': p.get('rating'), 'reviewCount': p.get('reviewCount'), 'stock': p.get('stock'),
+            'image': images[0] if images else '', 'images': images[:3], 'brand': p.get('brand') or '', 'seller': p.get('seller') or '',
+            'badge': p.get('badge') or '', 'near': p.get('near'),
         })
     for o in (result.get('orders') or [])[:3]:
         cards.append({
             'type': 'order', 'id': o.get('id'), 'status': o.get('status'), 'date': o.get('date'),
             'total': o.get('totalAmount'), 'payment': o.get('paymentStatus'),
         })
+    if result.get('contact'):  # phone numbers to call, shown as a card with tap-to-call
+        cards.append(result['contact'])
     return cards
 
 
@@ -150,7 +157,7 @@ def support_chat_view(request):
     ChatMessage.objects.create(id=_short('msg'), session=session, role='user', content=message)
     low = message.lower()
 
-    wants_human = _has(low, HUMAN_WORDS)
+    wants_human = _has(low, HUMAN_WORDS) and not nlu.wants_phone(low)  # "give me the support number" gets the number, not a ticket
     upset = _has(low, UPSET_WORDS)
     escalated, ticket_id = False, ''
 
@@ -159,32 +166,31 @@ def support_chat_view(request):
             ticket = _make_ticket(user, session, subject=message[:80] or 'Needs a person', category=_category(low), message=message,
                                   order_id=_order_id(message), priority='URGENT' if upset else 'HIGH')
             escalated, ticket_id = True, ticket.id
-            reply = (f"I'm sorry about this. I've passed your chat to our support team as ticket {ticket.id}, with everything we've "
-                     f"discussed so you don't have to repeat yourself. A person will reply here and in your tickets list.")
+            reply = (f"I've passed your chat to our support team as ticket **{ticket.id}**, with everything we've discussed so you don't "
+                     f"have to repeat yourself. Prefer to talk? Call **{SUPPORT_PHONE}** ({SUPPORT_HOURS}) and quote your ticket number, "
+                     f"or tap **Call me back** and we will ring you.")
         else:
-            reply = "I can bring in a person, but I need to know who you are first. Please sign in and ask again."
-        result = {'agent': 'handoff', 'suggestedActions': ['See my tickets', 'Track my order']}
+            reply = f"You can call us on **{SUPPORT_PHONE}** ({SUPPORT_HOURS}). Sign in and I can also open a ticket with this chat attached."
+        result = {'agent': 'handoff', 'suggestedActions': ['Call me back', 'See my tickets', 'Track my order'] if user else ['Sign in']}
     else:
-        use_orders = _has(low, ORDER_WORDS)
-        if use_orders and not user and _has(low, ['my order', 'mera order', 'track']):
-            result = {'agent': 'customer-engagement', 'suggestedActions': ['Sign in'],
+        # Order questions (track, my orders, cancel, return) are answered from the customer's own orders, never from the cart.
+        kind = order_chat.wants_orders(message)
+        if kind == 'track' and not user:
+            result = {'agent': 'order-desk', 'suggestedActions': ['Sign in', 'Talk to a person'],
                       'reply': 'Please sign in so I can look up your orders. I only ever show you your own.'}
-        elif use_orders:
+        elif kind and user:
+            result = order_chat.handle(kind, message, user.email, first_name(user))
+        elif re.search(r'\b(cart|subtotal|basket)\b', low):
             result = orchestrator.run_customer_engagement_agent(
                 query=message, customer_email=user.email if user else '', cart_items=request.data.get('cartItems') or [],
                 session_id=session.id)
         else:
             last = ChatMessage.objects.filter(session=session, role='assistant').exclude(cards=[]).order_by('-createdAt').first()
             result = agent_graph.run(message, name=first_name(user), memory=memory_note(UserMemory.objects.filter(userEmail=user.email.lower()).first()) if user else '',
-                                     last_cards=last.cards if last else [])
+                                     last_cards=last.cards if last else [], loc=product_qa.clean_location(request.data.get('location')))
         reply = str(result.get('reply') or "I couldn't find that. Want me to bring in a person?")
 
     cards = _cards(result)
-    order_card = next((c for c in cards if c.get('type') == 'order'), None)
-    if order_card and user:
-        note = _where_is_my_order(order_card['id'], user)
-        if note:
-            reply = f"{reply}\n\n{note}"
     learn(user, message)
     reply = personalise(user, reply, session.id + message)
     ChatMessage.objects.create(id=_short('msg'), session=session, role='assistant', content=reply,
@@ -341,21 +347,3 @@ def support_last_address_view(request):
         return Response({'address': None})
     keep = ('fullName', 'phone', 'addressLine', 'city', 'state', 'pinCode', 'latitude', 'longitude')
     return Response({'address': {**{k: a[k] for k in keep if k in a}, 'fulfillment': 'delivery'}})
-
-
-def _where_is_my_order(order_id, user):
-    """A plain sentence on where the customer's own order is now: which store, how far, and what step it is at."""
-    from .seller_orders import _km, drop_point, order_pickup
-    order = Order.objects.filter(id=order_id, customerEmail__iexact=user.email).first()
-    if not order:
-        return ''
-    pickup, drop = order_pickup(order), drop_point(order)
-    step = {'Packed': 'It has been packed and is ready to leave the store.', 'Confirmed': 'The seller is getting it ready.', 'Pending': 'It is waiting for payment or the seller to confirm.',
-            'Delivered': 'It has been delivered.', 'Cancelled': 'It was cancelled.'}.get(order.status, f'Status: {order.status}.')
-    where = ''
-    if pickup:
-        where = f" It is with {pickup['name']}"
-        if drop:
-            where += f", about {_km((pickup['lat'], pickup['lng']), (drop['lat'], drop['lng'])):.1f} km from your delivery address"
-        where += '.'
-    return f"{step}{where} Tap the order below to see the route on the map."

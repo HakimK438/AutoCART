@@ -141,7 +141,7 @@ def register_view(request):
         return Response({'detail': 'Name and Email are required'}, status=status.HTTP_400_BAD_REQUEST)
 
     if User.objects.filter(email__iexact=email).exists():
-        return Response({'detail': 'User with this email already exists'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'detail': 'User with this email already exists. Sign in instead to carry on where you left off.'}, status=status.HTTP_400_BAD_REQUEST)
 
     user = User(
         name=name,

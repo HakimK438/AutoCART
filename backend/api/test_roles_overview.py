@@ -150,6 +150,17 @@ class AgentOrdersRiskTests(RoleViewTests):
         self.assertEqual(agent_graph.run('buy the first one')['buyProductId'], '')  # nothing to refer to: it asks which product
         self.assertEqual(agent_graph.run('how does delivery work')['intent'], 'faq')
 
+    def test_naming_a_product_never_buys_the_last_shown_one(self):
+        from api import agent_graph
+        Product.objects.filter(id='b1').update(stock=4)
+        last = [{'type': 'product', 'id': 'a1'}]  # only the Flask was on screen
+        r = agent_graph.run('buy rival lamp', last_cards=last)
+        self.assertEqual(r['buyProductId'], 'b1')
+        self.assertEqual(agent_graph.run('buy it', last_cards=last)['buyProductId'], 'a1')
+        self.assertEqual(agent_graph.run('buy rivel lamp', last_cards=last)['buyProductId'], 'b1')  # typo is fixed
+        self.assertEqual(agent_graph.run('done', last_cards=last)['buyProductId'], 'a1')  # "done" carries on with that product
+        self.assertEqual(agent_graph.run('menu')['intent'], 'greet')
+
     def test_chat_returns_buy_id_and_cards(self):
         r = self.c.post('/api/support/chat', {'message': 'flask under 600'}, format='json').json()
         self.assertEqual([c['id'] for c in r['cards']], ['a1'])
@@ -206,6 +217,20 @@ class AdminSellerReviewTests(RoleViewTests):
         self.assertEqual(self.c.get('/api/admin/sellers/sel-1/detail').status_code, 403)
         self.assertEqual(self.boss.get('/api/admin/sellers/nope/detail').status_code, 404)
 
+    def test_seller_report_counts_real_orders_per_seller_and_is_admin_only(self):
+        from api.models import Seller
+        Seller.objects.create(id='sel-1', name='Sita', companyName='Sita Stores', status='Approved')
+        Seller.objects.create(id='sel-2', name='Ravi', companyName='Ravi Mart', status='Approved')
+        r = self.boss.get('/api/admin/seller-report').json()
+        rows = {x['id']: x for x in r['sellers']}
+        self.assertEqual((rows['sel-1']['revenue'], rows['sel-1']['orders'], rows['sel-1']['units']), (1000, 1, 2))  # Flask 500 x 2
+        self.assertEqual((rows['sel-2']['revenue'], rows['sel-2']['outOfStock']), (900, 1))  # Rival Lamp, sold out
+        self.assertEqual(r['totals']['revenue'], 1900)
+        self.assertEqual(r['sellers'][0]['id'], 'sel-1')  # biggest seller first
+        self.assertEqual(len(rows['sel-1']['trend']), 30)
+        self.assertEqual(self.a.get('/api/admin/seller-report').status_code, 403)
+        self.assertEqual(self.c.get('/api/admin/seller-report').status_code, 403)
+
 
 class OnlyCustomersBuyTests(RoleViewTests):
     def order(self, client):
@@ -214,12 +239,14 @@ class OnlyCustomersBuyTests(RoleViewTests):
 
     def test_only_customers_can_place_orders(self):
         self.assertEqual(self.guest.post('/api/orders', {}, format='json').status_code, 401)
-        self.assertEqual(self.a.post('/api/orders', {'items': [{'id': 'a2', 'quantity': 1}]}, format='json').status_code, 403)  # a seller
+        self.assertEqual(self.a.post('/api/orders', {'items': [{'id': 'a2', 'quantity': 1}]}, format='json').status_code, 403)  # a seller cannot buy their own product
         self.assertEqual(self.boss.post('/api/orders', {'items': [{'id': 'a2', 'quantity': 1}]}, format='json').status_code, 403)  # an admin
-        self.assertIn('Only customer', self.a.post('/api/orders', {}, format='json').json()['detail'])
+        self.assertIn('own store', self.a.post('/api/orders', {'items': [{'id': 'a2', 'quantity': 1}]}, format='json').json()['detail'])
         self.assertEqual(Product.objects.get(id='a2').stock, 50)  # nothing was taken from stock
         self.assertEqual(self.order(self.c).status_code, 201)
         self.assertEqual(Product.objects.get(id='a2').stock, 49)
+        # a seller can shop from another seller (b1 is Ravi's, sold out here, so only check it gets past the role gate)
+        self.assertNotEqual(self.a.post('/api/orders', {'items': [{'id': 'b1', 'quantity': 1}]}, format='json').status_code, 403)
 
 
 class SellerPhotosAndStockTests(RoleViewTests):

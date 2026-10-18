@@ -1,7 +1,7 @@
-import RoleTabs from './RoleTabs';
+import ProfileAvatar from './ProfileAvatar';
 import React, { useEffect, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { ShieldCheck, Store, ClipboardCheck, LifeBuoy, PackageCheck, Eye, EyeOff } from 'lucide-react';
+import { ShieldCheck, Store, ClipboardCheck, LifeBuoy, PackageCheck, Eye, EyeOff, ArrowLeft, ArrowRight, UserPlus, FileText, BadgeCheck } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import api from '../../services/api';
 import { BrandLink } from '../../storefront/Brand';
@@ -18,7 +18,8 @@ const CONFIG = {
     demo: ['admin@auracart.com', 'admin123'],
   },
   seller: {
-    title: 'Seller sign in', kicker: 'AutoCart seller centre', landing: '/seller/dashboard', allowed: ['SELLER', 'ADMIN'], Icon: Store,
+    // A CUSTOMER account is allowed too: someone whose application is not approved yet signs in here to carry on with it.
+    title: 'Seller sign in', kicker: 'AutoCart seller centre', landing: '/seller/dashboard', allowed: ['SELLER', 'ADMIN', 'CUSTOMER'], Icon: Store,
     pitch: 'Sell to shoppers near you',
     points: [[Store, 'See your store on the nearby-store map'], [LifeBuoy, 'Answer customer questions about your products'], [PackageCheck, 'Track your stock and orders']],
     wrong: 'This account is not an approved seller yet.',
@@ -42,7 +43,8 @@ export default function RoleLogin({ role }) {
   const [error, setError] = useState(state?.denied ? cfg.wrong : '');
 
   useEffect(() => { document.title = `${cfg.title} | AutoCart`; }, [cfg.title]);
-  if (user && cfg.allowed.includes(user.role) && !busy) return <Navigate to={state?.from?.pathname || cfg.landing} replace />;
+  const landingFor = (u) => (role === 'seller' && u?.role === 'CUSTOMER' ? '/seller/apply' : cfg.landing);
+  if (user && cfg.allowed.includes(user.role) && !busy) return <Navigate to={state?.from?.pathname || landingFor(user)} replace />;
 
   const createAccount = async (e) => {
     e.preventDefault();
@@ -54,7 +56,11 @@ export default function RoleLogin({ role }) {
       await api.post('/seller/applications/start');  // the admin can now see this sign-up
       navigate('/seller/apply', { replace: true });  // next: store details and documents (Aadhaar, PAN)
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'We could not create your account. This email may already be registered. Try signing in.');
+      const msg = err?.response?.data?.detail || err?.message || '';
+      if (/already exists/i.test(msg)) {  // they started before and came back: take them to sign in instead of a dead end
+        setMode('signin');
+        setError('This email already has an account, so you do not need to register again. Sign in with your password to carry on with your application.');
+      } else setError(msg || 'We could not create your account. Please try again.');
       setBusy(false);
     }
   };
@@ -65,7 +71,7 @@ export default function RoleLogin({ role }) {
     try {
       const data = await login(email.trim(), password);
       if (!cfg.allowed.includes(data.user.role)) { logout(); setError(cfg.wrong); setBusy(false); return; }
-      navigate(state?.from?.pathname || cfg.landing, { replace: true });
+      navigate(state?.from?.pathname || landingFor(data.user), { replace: true });
     } catch (err) {
       setError(err?.response?.status === 429 ? 'Too many tries. Please wait a minute and try again.' : err?.response?.data?.detail || 'We could not sign you in. Check your email and password.');
       setBusy(false);
@@ -85,18 +91,18 @@ export default function RoleLogin({ role }) {
       </aside>
 
       <main className="ac-rl-main">
-        <RoleTabs current={role} />
-        {role === 'seller' && (
-          <div role="tablist" aria-label="Seller account" className="ac-rl-modes">
-            <button role="tab" type="button" aria-selected={mode === 'signin'} onClick={() => { setMode('signin'); setError(''); }}>Sign in</button>
-            <button role="tab" type="button" aria-selected={mode === 'create'} onClick={() => { setMode('create'); setError(''); }}>Create seller account</button>
-          </div>
-        )}
+        <div className="ac-rl-who">
+          <ProfileAvatar role={role} size={56} label={`${role} profile picture`} />
+          <div><b>{role === 'admin' ? 'Administrator' : 'Seller'}</b><small>{mode === 'create' ? 'New seller application' : 'Welcome back'}</small></div>
+        </div>
         {mode === 'create' ? (
           <form className="ac-rl-card" onSubmit={createAccount} noValidate>
-            <cfg.Icon size={34} color="var(--brand)" />
+            <button type="button" className="ac-rl-back" onClick={() => { setMode('signin'); setError(''); }}><ArrowLeft size={16} /> Back to sign in</button>
+            <ol className="ac-rl-steps" aria-label="Application steps">
+              <li data-on="true"><span>1</span>Account</li><li><span>2</span>Documents</li><li><span>3</span>Review</li>
+            </ol>
             <h2 className="ac-display">Create your seller account</h2>
-            <p className="ac-muted" style={{ margin: '6px 0 18px' }}>Step 1 of 2. Next you add your store details and upload your Aadhaar (masked) and PAN. Our team reviews them before your store goes live.</p>
+            <p className="ac-muted" style={{ margin: '6px 0 18px' }}>Step 1 of 3. Next you upload your Aadhaar (masked), PAN and bank proof. We read them and fill in everything else. Our team reviews it before your store goes live.</p>
             {error && <div className="ac-box" role="alert" style={{ borderColor: 'var(--coral)', color: 'var(--coral)', marginBottom: 16, padding: 14, fontWeight: 600 }}>{error}</div>}
             <div className="ac-field"><label htmlFor="sr-name">Full name</label>
               <input id="sr-name" className="ac-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoComplete="name" required /></div>
@@ -110,14 +116,10 @@ export default function RoleLogin({ role }) {
               <input id="sr-pw2" type={show ? 'text' : 'password'} className="ac-input" value={form.confirm} onChange={(e) => setForm({ ...form, confirm: e.target.value })} autoComplete="new-password" required /></div>
             <label className="ac-check" style={{ marginTop: 10 }}><input type="checkbox" checked={show} onChange={(e) => setShow(e.target.checked)} /><span>Show passwords</span></label>
             <button className="ac-btn ac-btn-blue" style={{ width: '100%', marginTop: 18 }} disabled={busy}>{busy ? 'Creating…' : 'Create account and continue'}</button>
-            <div className="ac-rl-links">
-              <button type="button" className="ac-textlink" style={{ border: 0, background: 'none' }} onClick={() => { setMode('signin'); setError(''); }}>Already have a seller account? Sign in</button>
-              <Link to="/">Back to the store</Link>
-            </div>
+            <div className="ac-rl-links"><Link to="/">Back to the store</Link></div>
           </form>
         ) : (
         <form className="ac-rl-card" onSubmit={submit} noValidate>
-          <cfg.Icon size={34} color="var(--brand)" />
           <h2 className="ac-display">{cfg.title}</h2>
           <p className="ac-muted" style={{ margin: '6px 0 22px' }}>{role === 'admin' ? 'Use your administrator account.' : 'Use the account you applied with.'}</p>
           {error && <div className="ac-box" role="alert" style={{ borderColor: 'var(--coral)', color: 'var(--coral)', marginBottom: 16, padding: 14, fontWeight: 600 }}>{error}</div>}
@@ -133,10 +135,16 @@ export default function RoleLogin({ role }) {
             <button type="button" className="ac-textlink" style={{ border: 0, background: 'none', marginTop: 14, display: 'block' }} onClick={() => { setEmail(cfg.demo[0]); setPassword(cfg.demo[1]); }}>Fill the demo account (development only)</button>
           )}
           <div className="ac-rl-links">
-            {role === 'seller' && <button type="button" className="ac-textlink" style={{ border: 0, background: 'none' }} onClick={() => { setMode('create'); setError(''); }}>New seller? Create an account</button>}
             <Link to="/login">Customer sign in</Link>
             <Link to="/">Back to the store</Link>
           </div>
+          {role === 'seller' && (
+            <div className="ac-rl-new">
+              <b>New to selling on AutoCart?</b>
+              <ul><li><UserPlus size={15} /> Create an account</li><li><FileText size={15} /> Upload your documents once</li><li><BadgeCheck size={15} /> We fill the form and review it</li></ul>
+              <button type="button" className="ac-btn ac-btn-outline" style={{ width: '100%' }} onClick={() => { setMode('create'); setError(''); }}>Start your seller application <ArrowRight size={16} /></button>
+            </div>
+          )}
         </form>
         )}
       </main>

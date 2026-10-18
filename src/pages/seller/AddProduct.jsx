@@ -6,7 +6,7 @@ const CATS = ['Electronics', 'Fashion', 'Home & Kitchen', 'Beauty & Personal Car
 const EMPTY = { name: '', category: CATS[0], brand: '', price: '', stock: '', description: '', autoRestock: false, reorderLevel: '5', restockQty: '20' };
 
 /** List a new product with a photo. It starts with no rating or reviews; those have to be earned from real buyers. */
-export default function AddProduct({ onAdded }) {
+export default function AddProduct({ onAdded, defaultOpen = false }) {
   const [f, setF] = useState(EMPTY);
   const [photo, setPhoto] = useState(null);
   const [preview, setPreview] = useState('');
@@ -33,7 +33,7 @@ export default function AddProduct({ onAdded }) {
       {errs[k] && <small role="alert" style={{ color: 'var(--coral)' }}>{errs[k]}</small>}</div>
   );
   return (
-    <details className="ac-box" style={{ marginTop: 24 }}>
+    <details className="ac-box" style={{ marginTop: 24 }} open={defaultOpen || undefined} id="add-product">
       <summary style={{ cursor: 'pointer', fontWeight: 700 }}><Plus size={16} style={{ verticalAlign: '-3px' }} /> Add a product</summary>
       <form onSubmit={submit} style={{ display: 'grid', gap: 12, marginTop: 14, maxWidth: 620 }}>
         <div>

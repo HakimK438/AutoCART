@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, AlertTriangle, FileText, X, MapPin } from 'lucide-react';
 import api from '../../services/api';
 import LocationPinMap from '../../storefront/LocationPinMap';
+import SellerDP from './SellerDP';
 
 const GSTIN = /^\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]Z[A-Z\d]$/;
 export const DOC_LABEL = { AADHAAR: 'Aadhaar (masked)', PAN: 'PAN card', GST_CERTIFICATE: 'GST certificate', ADDRESS_PROOF: 'Address proof', BANK_PROOF: 'Bank proof', STORE_PHOTO: 'Store photo' };
@@ -25,10 +26,9 @@ export function readiness(p) {
   const loc = p.store?.latitude != null && p.store?.longitude != null;
   const mism = (p.comparison?.checks || []).filter((c) => c.status === 'mismatch');
   const items = [
-    doc('AADHAAR', 'Aadhaar card (masked)'), doc('PAN', 'PAN card'), doc('GST_CERTIFICATE', 'GST certificate'),
-    doc('ADDRESS_PROOF', 'Address proof'), doc('BANK_PROOF', 'Bank proof'), doc('STORE_PHOTO', 'Store photo'),
+    doc('AADHAAR', 'Aadhaar card (masked)'), doc('PAN', 'PAN card'), doc('BANK_PROOF', 'Bank proof'),
     { name: 'Store location pinned on the map', state: loc ? 'ok' : 'bad', note: loc ? `${p.store.latitude.toFixed(4)}, ${p.store.longitude.toFixed(4)}` : 'Seller has not set a location' },
-    { name: 'GSTIN looks valid', state: GSTIN.test(String(p.gstin || '').toUpperCase()) ? 'ok' : 'warn', note: p.gstin || 'Missing' },
+    ...(p.gstin ? [{ name: 'GSTIN looks valid', state: GSTIN.test(String(p.gstin).toUpperCase()) ? 'ok' : 'warn', note: p.gstin }] : []),
     { name: 'Form agrees with the documents', state: mism.length ? 'bad' : (p.comparison?.checks || []).length ? 'ok' : 'warn', note: mism.length ? `${mism.length} mismatch${mism.length > 1 ? 'es' : ''}: ${mism.map((m) => m.label).join('; ')}` : (p.comparison?.checks || []).length ? 'No mismatches found' : 'Nothing to compare yet' },
   ];
   const blockers = [];
@@ -44,9 +44,80 @@ const Card = ({ title, children, className = '' }) => (
 const Row = ({ k, v }) => (v ? <div className="flex gap-3 py-1.5 text-sm"><dt className="w-32 shrink-0 text-gray-500">{k}</dt><dd className="font-medium text-gray-900 break-words min-w-0">{v}</dd></div> : null);
 const ICON = { ok: <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0" />, warn: <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />, bad: <XCircle className="w-5 h-5 text-red-600 shrink-0" /> };
 
+const ZONES = [[0, 25, '#16a34a'], [25, 55, '#f59e0b'], [55, 100, '#dc2626']];  // the same cut-offs the backend uses for Low, Medium, High
+const pt = (cx, cy, r, v) => { const t = (Math.min(100, Math.max(0, v)) / 100) * Math.PI; return [cx - r * Math.cos(t), cy - r * Math.sin(t)]; };
+const arc = (cx, cy, r, a, b) => { const [x1, y1] = pt(cx, cy, r, a); const [x2, y2] = pt(cx, cy, r, b); return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`; };
+
+/**
+ * A speedometer for the risk score: green, amber and red zones with a needle that swings to the score.
+ * Before there is a score (documents missing) it becomes a "verification progress" dial instead, so it never reads as an empty "Not scored".
+ */
+export function RiskGauge({ score = 0, category, size = 'lg', progress }) {
+  const incomplete = category === 'Incomplete';
+  const r = RISK[category] || RISK.Medium;
+  const [shown, setShown] = useState(0);
+  useEffect(() => { const t = setTimeout(() => setShown(incomplete ? 0 : score), 60); return () => clearTimeout(t); }, [score, incomplete]);
+  const big = size === 'lg';
+  const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const pct = progress && progress.total ? Math.max(4, (progress.passed / progress.total) * 100) : 4;  // always a sliver, so the dial never looks empty
+  return (
+    <div className={`text-center ${big ? 'w-[250px]' : 'w-[92px]'} shrink-0`} role="img" aria-label={incomplete ? `Verification in progress${progress ? `, ${progress.passed} of ${progress.total} checks done` : ''}. The risk score appears once documents are in.` : `Risk score ${score} out of 100, ${r.word}`}>
+      <svg viewBox="0 0 200 118" className="w-full block">
+        {incomplete ? (
+          <>
+                        <path d={arc(100, 100, 80, 0, 100)} stroke="#e5e7eb" strokeWidth="16" fill="none" strokeLinecap="round" />
+            <path d={arc(100, 100, 80, 0, pct)} className="stroke-indigo-600" strokeWidth="16" fill="none" strokeLinecap="round" />
+          </>
+        ) : (
+          <>
+            {ZONES.map(([a, b, c]) => <path key={a} d={arc(100, 100, 80, a + 0.6, b - 0.6)} stroke={c} strokeWidth="16" fill="none" strokeLinecap="butt" opacity={0.9} />)}
+            <g style={{ transform: `rotate(${shown * 1.8}deg)`, transformOrigin: '100px 100px', transition: reduce ? 'none' : 'transform 900ms cubic-bezier(.2,1.3,.4,1)' }}>
+              <line x1="100" y1="100" x2="30" y2="100" stroke="#111827" strokeWidth={big ? 4 : 6} strokeLinecap="round" />
+            </g>
+            <circle cx="100" cy="100" r={big ? 8 : 10} fill="#111827" />
+          </>
+        )}
+        {big && !incomplete && <><text x="16" y="116" fontSize="10" fill="#6b7280" textAnchor="middle">0</text><text x="184" y="116" fontSize="10" fill="#6b7280" textAnchor="middle">100</text></>}
+      </svg>
+      {incomplete
+        ? (big
+          ? <><div className="font-extrabold text-indigo-700 leading-none text-3xl -mt-14 tabular-nums">{progress ? `${progress.passed}/${progress.total}` : '...'}</div>
+            <div className="text-xs font-bold text-indigo-600 mt-1">checks verified</div>
+            <div className="text-xs text-gray-500 mt-3">Risk score appears once Aadhaar, PAN and the store pin are in.</div></>
+          : <div className="font-bold text-indigo-600 leading-tight text-[11px] -mt-2">Verifying{progress ? ` ${progress.passed}/${progress.total}` : ''}</div>)
+        : <><div className={`font-extrabold tabular-nums leading-none ${big ? 'text-4xl -mt-1' : 'text-base'}`} style={{ color: ZONES.find(([, b]) => score <= b)?.[2] }}>{score}<span className={big ? 'text-base font-bold text-gray-400' : 'text-[10px] font-bold text-gray-400'}>/100</span></div>
+          <div className={`font-bold ${big ? 'text-sm mt-1' : 'text-[11px]'} ${r.ring.split(' ')[1]}`}>{r.word}</div></>}
+    </div>
+  );
+}
+
+/** Plain-language reasons behind the score, worked out from the real application. */
+export function riskReasons(p) {
+  const docs = Object.fromEntries((p.documents || []).map((d) => [d.docType, d]));
+  const out = [];
+  const missing = ['AADHAAR', 'PAN', 'BANK_PROOF'].filter((t) => !docs[t]).map((t) => DOC_LABEL[t].replace(' (masked)', ''));
+  if (missing.length) out.push({ tone: 'bad', text: `Not uploaded yet: ${missing.join(', ')}.` });
+  if (p.store?.latitude == null) out.push({ tone: 'bad', text: 'Store is not pinned on the map.' });
+  (p.comparison?.checks || []).filter((c) => c.status === 'mismatch').forEach((c) => out.push({ tone: 'bad', text: `${c.label}: ${c.detail}` }));
+  (p.comparison?.checks || []).filter((c) => !['match', 'mismatch'].includes(c.status)).forEach((c) => out.push({ tone: 'warn', text: `${c.label}: could not be read from the document.` }));
+  if (!p.gstin) out.push({ tone: 'warn', text: 'No GSTIN given. Small sellers can sell without one, but it adds to the score.' });
+  if (!p.pan && !(p.identity || {}).pan) out.push({ tone: 'warn', text: 'No PAN number on the form.' });
+  if (!out.length) out.push({ tone: 'ok', text: 'Documents agree with the form. Nothing looks unusual.' });
+  return out;
+}
+const REASON_ICON = { ok: <CheckCircle2 className="w-4 h-4 text-green-600 shrink-0 mt-0.5" />, warn: <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />, bad: <XCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" /> };
+
 export function RiskBadge({ score, category, size = 'lg' }) {
   const r = RISK[category] || RISK.Medium;
   const big = size === 'lg';
+  if (category === 'Incomplete') {  // nothing to judge yet: a number here would look like "very low risk"
+    return (
+      <div className={`rounded-2xl border-2 ${r.ring} text-center ${big ? 'px-6 py-4 min-w-[150px]' : 'px-3 py-1.5'}`} aria-label="Verification in progress">
+        <div className={`font-extrabold leading-none ${big ? 'text-3xl' : 'text-base'}`}>Verifying</div>
+        <div className={`font-bold ${big ? 'text-sm mt-1' : 'text-xs'}`}>awaiting documents</div>
+      </div>
+    );
+  }
   return (
     <div className={`rounded-2xl border-2 ${r.ring} text-center ${big ? 'px-6 py-4 min-w-[150px]' : 'px-3 py-1.5'}`} aria-label={`Risk score ${score} out of 100, ${r.word}`}>
       <div className={`font-extrabold tabular-nums leading-none ${big ? 'text-5xl' : 'text-base'}`}>{score}<span className={big ? 'text-xl font-bold' : 'text-xs font-bold'}>/100</span></div>
@@ -55,7 +126,7 @@ export function RiskBadge({ score, category, size = 'lg' }) {
   );
 }
 
-export default function SellerProfileView({ p }) {
+export default function SellerProfileView({ p, showIdentity = true }) {
   const [preview, setPreview] = useState(null);
   const [fileErr, setFileErr] = useState('');
   const ready = readiness(p);
@@ -76,15 +147,26 @@ export default function SellerProfileView({ p }) {
   return (
     <div className="space-y-4">
       {/* 1. Who, and how risky */}
-      <section className="bg-white rounded-2xl border border-gray-200 p-5 flex flex-wrap items-center gap-5 justify-between">
-        <div className="min-w-0">
-          <div className="text-xs uppercase tracking-wide text-gray-400">Application {p.id}</div>
-          <h2 className="text-2xl font-extrabold text-gray-900 truncate">{p.companyName}</h2>
-          <p className="text-sm text-gray-600">{p.applicantName} · {p.city}{p.createdAt ? ` · sent ${new Date(p.createdAt).toLocaleDateString()}` : ''}</p>
-          <p className="text-sm mt-2"><b>{ready.passed} of {ready.total}</b> checks passed. {ready.blockers.length ? <span className="text-red-700 font-semibold">Missing: {ready.blockers.join(', ')}.</span> : <span className="text-green-700 font-semibold">Ready for a decision.</span>}</p>
-          {p.aiAssessment && <p className="text-xs text-gray-500 mt-1 max-w-xl">{p.aiAssessment}</p>}
+      <section className="bg-white rounded-2xl border border-gray-200 p-5">
+        <div className="flex flex-wrap items-center gap-6">
+          <RiskGauge score={p.riskScore} category={ready.blockers.length && p.status !== 'APPROVED' ? 'Incomplete' : p.riskCategory} progress={{ passed: ready.passed, total: ready.total }} />
+          <div className="min-w-0 flex-1 basis-64">
+            {showIdentity ? (
+              <>
+                <div className="text-xs uppercase tracking-wide text-gray-400">Application {p.id}</div>
+                <div className="flex items-center gap-3"><SellerDP name={p.companyName} size={44} /><h2 className="text-2xl font-extrabold text-gray-900 truncate">{p.companyName}</h2></div>
+                <p className="text-sm text-gray-600">{p.applicantName} · {p.city}{p.createdAt ? ` · sent ${new Date(p.createdAt).toLocaleDateString()}` : ''}</p>
+              </>
+            ) : <h3 className="font-bold text-gray-900">Risk check</h3>}
+            <p className="text-sm mt-2"><b>{ready.passed} of {ready.total}</b> checks passed. {ready.blockers.length ? <span className="text-red-700 font-semibold">Missing: {ready.blockers.join(', ')}.</span> : <span className="text-green-700 font-semibold">Ready for a decision.</span>}</p>
+            <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden" aria-hidden="true"><div className="h-full rounded-full bg-indigo-500 transition-all duration-700" style={{ width: `${(ready.passed / ready.total) * 100}%` }} /></div>
+          </div>
         </div>
-        <RiskBadge score={p.riskScore} category={ready.blockers.length ? 'Incomplete' : p.riskCategory} />
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <h3 className="font-bold text-gray-900 text-sm mb-2">Why this score</h3>
+          <ul className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5">{riskReasons(p).map((x, i) => <li key={i} className="flex gap-2 text-sm text-gray-700">{REASON_ICON[x.tone]}<span>{x.text}</span></li>)}</ul>
+          <p className="text-xs text-gray-400 mt-2">The score is a guide built from the documents. You make the decision.</p>
+        </div>
       </section>
 
       {/* 2. The checklist an admin walks through */}

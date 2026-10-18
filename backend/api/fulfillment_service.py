@@ -191,11 +191,28 @@ class FulfillmentService:
         }
 
     @classmethod
+    def allocate_store(cls, items: List[Dict[str, Any]], lat: Optional[float], lng: Optional[float], max_km: float = 60.0) -> Optional[Store]:
+        """The closest open store that has every item in stock, or None (then the seller's own pin is used, as before)."""
+        if lat is None or lng is None or not items:
+            return None
+        wanted = {str(i.get('id')): int(i.get('quantity') or 1) for i in items}
+        best, best_km = None, max_km
+        for store in Store.objects.filter(operatingStatus='Open').exclude(latitude=0):
+            km = haversine_distance_km(lat, lng, store.latitude, store.longitude)
+            if km >= best_km:
+                continue
+            have = {inv.product_id: inv.availableQuantity for inv in StoreInventory.objects.filter(store=store, product_id__in=list(wanted), isAvailable=True)}
+            if all(have.get(pid, 0) >= q for pid, q in wanted.items()):
+                best, best_km = store, km
+        return best
+
+    @classmethod
     def initiate_fulfillment(
         cls,
         order: Order,
         store: Optional[Store] = None,
-        fulfillment_type: str = 'Store Delivery'
+        fulfillment_type: str = 'Store Delivery',
+        distance_km: Optional[float] = None
     ) -> OrderFulfillment:
         """
         Initializes OrderFulfillment with tracking number and multi-stage status timeline.
@@ -222,8 +239,8 @@ class FulfillmentService:
                 'deliveryPartner': 'AutoCart Hyperlocal Express (Dev Mode Adapter)',
                 'trackingNumber': tracking_num,
                 'currentStatus': 'Order Allocated',
-                'distanceKm': 3.8 if store else 8.5,
-                'estimatedDeliveryMinutes': 35 if store else 60,
+                'distanceKm': round(distance_km, 1) if distance_km is not None else (3.8 if store else 8.5),
+                'estimatedDeliveryMinutes': max(25, int(distance_km * 3.2) + 15) if distance_km is not None else (35 if store else 60),
                 'deliveryAddress': dest_addr,
                 'timeline': timeline
             }

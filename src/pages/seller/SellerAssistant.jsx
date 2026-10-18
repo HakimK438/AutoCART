@@ -54,7 +54,6 @@ export default function SellerAssistant() {
                   <tbody>{m.a.rows.map((r, j) => <tr key={j}>{r.map((v, k) => <td key={k}>{v}</td>)}</tr>)}</tbody>
                 </table>
               )}
-              {m.a.source && <small className="ac-muted">Source: {m.a.source}{m.a.provider && m.a.provider !== 'database' ? ' · worded by Gemini' : ''}</small>}
             </div>
           ))}
         <div ref={end} />

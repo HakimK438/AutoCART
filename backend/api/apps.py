@@ -11,3 +11,5 @@ class ApiConfig(AppConfig):
         if 'runserver' in sys.argv:
             from .agent_graph import warm_up
             warm_up()
+            from .seller_docs import warm_ocr
+            warm_ocr()

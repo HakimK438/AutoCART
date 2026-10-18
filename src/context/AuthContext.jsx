@@ -44,6 +44,8 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     localStorage.removeItem('auracart_user');
     localStorage.removeItem('auracart_token');
+    // Munim's conversation lives only until the seller signs out.
+    try { Object.keys(localStorage).filter((k) => k.startsWith('munim_chat_')).forEach((k) => localStorage.removeItem(k)); } catch { /* storage blocked */ }
   };
 
   const isAuthenticated = !!token && !!user;

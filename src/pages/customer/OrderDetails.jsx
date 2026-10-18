@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Check, Circle } from 'lucide-react';
+import { Check, Circle, PartyPopper } from 'lucide-react';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
 import OrderRouteMap from '../../storefront/OrderRouteMap';
 import StoreMap from '../../storefront/StoreMap';
 import UpiPay from '../../storefront/UpiPay';
+import RazorpayTest from '../../storefront/RazorpayTest';
 import { money, sized, firstImage } from '../../storefront/parts';
 import { statusTone } from './Orders';
 import '../../storefront/storefront.css';
@@ -29,6 +30,13 @@ export const OrderDetails = () => {
     } catch { setError('We could not find that order.'); }
   }, [id]);
   useEffect(() => { document.title = `Order ${id} | AutoCart`; load(); }, [id, load]);
+  // Follow the order while it is on its way: the seller's next step shows up here without a refresh.
+  const finished = order && ['Delivered', 'Completed', 'Cancelled', 'Returned', 'Return Requested'].includes(order.status);
+  useEffect(() => {
+    if (!order || finished) return undefined;
+    const t = window.setInterval(load, 15000);
+    return () => window.clearInterval(t);
+  }, [order, finished, load]);
 
   const act = async (path, label) => {
     setNote('');
@@ -40,7 +48,8 @@ export const OrderDetails = () => {
   if (!order) return <div className="ac ac-page"><div className="ac-wrap"><div className="ac-skel" style={{ height: 300 }} /></div></div>;
 
   const isUpi = order.paymentMethod.startsWith('UPI (');
-  const needsPayment = isUpi && ['Awaiting Payment', 'Failed'].includes(order.paymentStatus) && order.status !== 'Cancelled';
+  const isOnline = order.paymentMethod.startsWith('Razorpay');
+  const needsPayment = (isUpi || isOnline) && ['Awaiting Payment', 'Failed'].includes(order.paymentStatus) && order.status !== 'Cancelled';
   const canCancel = ['Pending', 'Confirmed', 'Processing'].includes(order.status);
   const store = track?.storeLocation;
   const steps = track?.timeline?.length ? track.timeline : order.timeline || [];
@@ -53,6 +62,15 @@ export const OrderDetails = () => {
         <div className="ac-row"><span className="ac-chip-status" data-tone={statusTone(order.status)}>{order.status}</span><span className="ac-chip-status" data-tone={order.paymentStatus === 'Paid' ? 'ok' : statusTone(order.paymentStatus)}>{order.paymentStatus}</span></div>
       </div>
       {note && <div className="ac-box" role="status" style={{ marginBottom: 16, borderColor: 'var(--brand)' }}>{note}</div>}
+      {order.status === 'Delivered' && (
+        <div className="ac-box" role="status" style={{ marginBottom: 16, borderColor: 'var(--ok)', background: '#effaf3', display: 'flex', gap: 14, alignItems: 'center' }}>
+          <PartyPopper size={30} color="var(--ok)" aria-hidden="true" />
+          <div><b style={{ fontSize: 18 }}>Your product has reached you</b><p className="ac-muted" style={{ margin: '2px 0 0' }}>Order {order.id} is delivered. We hope you love it. If something is not right, you can return it within 7 days using the button on the right.</p></div>
+        </div>
+      )}
+      {['Out for Delivery', 'Ready for Pickup'].includes(order.status) && (
+        <div className="ac-box" role="status" style={{ marginBottom: 16, borderColor: 'var(--brand)' }}><b>{order.status === 'Out for Delivery' ? 'Your order is on its way.' : 'Your order is ready to collect from the store.'}</b> This page updates by itself.</div>
+      )}
 
       <div className="ac-twocol">
         <div>
@@ -65,6 +83,21 @@ export const OrderDetails = () => {
             </ol>
             {track && <p className="ac-muted" style={{ fontSize: 14, margin: '8px 0 0' }}>Tracking {track.trackingNumber} · about {track.estimatedDeliveryMinutes} minutes once it leaves the store.</p>}
           </div>
+
+          {track?.fulfilledBy?.storeName && (
+            <div className="ac-box">
+              <h2>Your order is with</h2>
+              <p style={{ margin: '8px 0 0', fontWeight: 700, fontSize: 18 }}>{track.fulfilledBy.storeName}</p>
+              {track.fulfilledBy.predictedNearest && <p className="ac-muted" style={{ margin: '2px 0 0', fontSize: 14 }}>Nearest store to you, picked automatically.</p>}
+              <dl className="ac-sum" style={{ marginTop: 10 }}>
+                {track.fulfilledBy.sellerName && <div><dt>Seller</dt><dd>{track.fulfilledBy.sellerName}</dd></div>}
+                {track.fulfilledBy.address && <div><dt>Store address</dt><dd>{track.fulfilledBy.address}</dd></div>}
+                {track.fulfilledBy.phone && <div><dt>Phone</dt><dd><a href={`tel:${track.fulfilledBy.phone}`}>{track.fulfilledBy.phone}</a></dd></div>}
+                {track.fulfilledBy.distanceKm != null && <div><dt>Distance to you</dt><dd>{track.fulfilledBy.distanceKm} km</dd></div>}
+                {track.trackingNumber && <div><dt>Tracking ID</dt><dd>{track.trackingNumber}</dd></div>}
+              </dl>
+            </div>
+          )}
 
           {(track?.pickup && track?.customerLocation) && (
             <div className="ac-box">
@@ -93,7 +126,8 @@ export const OrderDetails = () => {
         </div>
 
         <aside>
-          <div className="ac-box ac-summary">
+          {/* Not .ac-summary: that class is sticky (right for checkout) and made this card slide over the boxes below it. */}
+          <div className="ac-box">
             <h2>Payment</h2>
             <dl className="ac-sum">
               <div><dt>Subtotal</dt><dd>{money(order.subtotal)}</dd></div>
@@ -102,7 +136,7 @@ export const OrderDetails = () => {
               <div className="ac-sum-total"><dt>Total</dt><dd>{money(order.totalAmount)}</dd></div>
             </dl>
             <p className="ac-muted" style={{ fontSize: 14 }}>{order.paymentMethod}</p>
-            {needsPayment && <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={() => setPaying(true)}>{order.paymentStatus === 'Failed' ? 'Pay again with UPI' : 'Pay now with UPI'}</button>}
+            {needsPayment && <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={() => setPaying(true)}>{order.paymentStatus === 'Failed' ? `Pay again${isUpi ? ' with UPI' : ''}` : `Pay now${isUpi ? ' with UPI' : ''}`}</button>}
             {isUpi && order.paymentStatus === 'Verifying' && <p className="ac-muted" role="status">Waiting for the seller to confirm your UPI payment.</p>}
             {isUpi && order.paymentStatus === 'Failed' && <p className="ac-warn" role="alert">The seller could not find this payment. Check the UPI reference and try again.</p>}
             {canCancel && <button className="ac-btn ac-btn-outline ac-btn-small" style={{ width: '100%', marginTop: 10 }} onClick={() => act('cancel', 'Cancel')}>Cancel order</button>}
@@ -110,7 +144,12 @@ export const OrderDetails = () => {
           </div>
           <div className="ac-box">
             <h2>Delivery</h2>
-            <p className="ac-muted" style={{ margin: '6px 0 0' }}>{order.customerName}<br />{order.shippingAddress?.addressLine ? `${order.shippingAddress.addressLine}, ${order.shippingAddress.city} ${order.shippingAddress.pinCode}` : order.shippingAddress?.storeName ? `Pickup at ${order.shippingAddress.storeName}` : '-'}</p>
+            <p className="ac-muted" style={{ margin: '6px 0 0' }}>
+              <b style={{ color: 'var(--ink)' }}>{order.customerName}</b>{order.customerPhone ? <> · <a href={`tel:${order.customerPhone}`}>{order.customerPhone}</a></> : null}<br />
+              {order.shippingAddress?.addressLine
+                ? [order.shippingAddress.addressLine, order.shippingAddress.landmark && `Near ${order.shippingAddress.landmark}`, order.shippingAddress.city, order.shippingAddress.state, order.shippingAddress.pinCode].filter(Boolean).join(', ')
+                : order.shippingAddress?.storeName ? `Pickup at ${order.shippingAddress.storeName}` : '-'}
+            </p>
           </div>
           <div className="ac-box">
             <h2>Need help?</h2>
@@ -119,7 +158,9 @@ export const OrderDetails = () => {
           </div>
         </aside>
       </div>
-      {paying && <UpiPay order={order} onSubmitted={() => { setPaying(false); setNote('Thanks. The seller will confirm your payment shortly.'); load(); }} onClose={() => setPaying(false)} />}
+      {paying && (isOnline
+        ? <RazorpayTest order={order} user={user} onPaid={() => { setPaying(false); setNote('Payment received. Thank you!'); load(); }} onClose={() => setPaying(false)} />
+        : <UpiPay order={order} onSubmitted={() => { setPaying(false); setNote('Thanks. The seller will confirm your payment shortly.'); load(); }} onClose={() => setPaying(false)} />)}
     </div></div>
   );
 };

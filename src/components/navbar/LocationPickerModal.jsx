@@ -1,170 +1,97 @@
-import React, { useState } from 'react';
-import { MapPin, Navigation, X, Check, ShieldCheck, Loader2, Search } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { MapPin, Navigation, X, ShieldCheck, Loader2, Search } from 'lucide-react';
 import { useLocation } from '../../context/LocationContext';
+import '../../storefront/storefront.css';
+import '../../storefront/forms.css';
+import '../../storefront/pages.css';
 
-const POPULAR_HUBS = [
-  { name: 'Bengaluru (Indiranagar)', pin: '560038', city: 'Bengaluru' },
-  { name: 'Bengaluru (Koramangala)', pin: '560034', city: 'Bengaluru' },
-  { name: 'Mumbai (Bandra)', pin: '400050', city: 'Mumbai' },
-  { name: 'New Delhi (CP)', pin: '110001', city: 'New Delhi' },
-  { name: 'Hyderabad (Hitec City)', pin: '500081', city: 'Hyderabad' },
+const HUBS = [
+  { name: 'Andheri', pin: '400069' },
+  { name: 'Bandra', pin: '400050' },
+  { name: 'Powai', pin: '400076' },
+  { name: 'Borivali', pin: '400092' },
+  { name: 'Ghatkopar', pin: '400077' },
+  { name: 'Thane', pin: '400601' },
+  { name: 'Navi Mumbai (Vashi)', pin: '400703' },
+  { name: 'Kalyan', pin: '421301' },
 ];
 
+/** "Select delivery location" dialog, in the same look as the payment and chat dialogs. */
 export const LocationPickerModal = ({ isOpen, onClose }) => {
   const { location, loading, error, requestBrowserLocation, setManualLocation } = useLocation();
   const [pinInput, setPinInput] = useState('');
-  const [statusMessage, setStatusMessage] = useState('');
+  const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
-  const handleManualSubmit = async (e) => {
-    e?.preventDefault();
-    if (!pinInput.trim()) return;
-    setStatusMessage('Checking store serviceability...');
-    const ok = await setManualLocation(pinInput.trim());
-    if (ok) {
-      setStatusMessage('Location updated successfully!');
-      setTimeout(() => {
-        setStatusMessage('');
-        onClose();
-      }, 700);
-    } else {
-      setStatusMessage('');
-    }
+  const choose = async (value) => {
+    if (!value.trim()) return;
+    setStatus('Checking which stores can deliver there…');
+    const ok = await setManualLocation(value.trim());
+    if (ok) { setStatus('Location updated.'); window.setTimeout(() => { setStatus(''); onClose(); }, 600); } else setStatus('');
   };
 
-  const handleQuickSelect = async (pin) => {
-    setStatusMessage(`Switching location to ${pin}...`);
-    const ok = await setManualLocation(pin);
-    if (ok) {
-      setTimeout(() => {
-        setStatusMessage('');
-        onClose();
-      }, 500);
-    }
-  };
-
-  const handleBrowserGeo = () => {
+  const useDevice = () => {
     requestBrowserLocation();
-    setTimeout(() => {
-      onClose();
-    }, 1500);
+    window.setTimeout(onClose, 1500);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
-      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-gray-100 overflow-hidden">
-        {/* Header */}
-        <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-5 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-400/30 flex items-center justify-center">
-              <MapPin className="w-5 h-5 text-amber-300" />
-            </div>
-            <div>
-              <h3 className="font-extrabold text-sm">Select Delivery Location</h3>
-              <p className="text-[11px] text-indigo-200">Hyperlocal inventory & 35-min delivery</p>
-            </div>
+    <div className="ac">
+      <div className="ac-sc-back" style={{ zIndex: 95 }} onClick={onClose} aria-hidden="true" />
+      <div className="ac-rzp" style={{ width: 'min(440px, calc(100% - 24px))' }} role="dialog" aria-modal="true" aria-label="Select delivery location">
+        <div className="ac-rzp-head">
+          <div>
+            <b>Select delivery location</b>
+            <small style={{ opacity: 0.85 }}>See what local stores near you have in stock</small>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <button className="ac-sc-x" style={{ background: 'rgba(255,255,255,.18)', color: '#fff' }} onClick={onClose} aria-label="Close"><X size={18} /></button>
         </div>
 
-        {/* Body */}
-        <div className="p-5 space-y-4 text-xs">
-          {/* Current Location Display */}
-          <div className="p-3 bg-indigo-50/60 rounded-2xl border border-indigo-100 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="text-gray-600 font-medium">Currently delivering to:</span>
+        <div className="ac-rzp-body" style={{ display: 'grid', gap: 16 }}>
+          <div className="ac-storebox">
+            <MapPin size={20} color="var(--brand)" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <small className="ac-muted">Delivering to</small>
+              <div><b>{location.displayName || `${location.city} (${location.pincode})`}</b></div>
             </div>
-            <span className="font-bold text-indigo-950 truncate max-w-[200px]">
-              {location.displayName || `${location.city} (${location.pincode})`}
-            </span>
           </div>
 
-          {/* Device Location Button */}
-          <button
-            onClick={handleBrowserGeo}
-            disabled={loading}
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold transition shadow-sm cursor-pointer disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Navigation className="w-4 h-4 text-amber-300" />
-            )}
-            <span>Use My Current Device Location</span>
+          <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={useDevice} disabled={loading}>
+            {loading ? <Loader2 size={18} className="ac-spin" /> : <Navigation size={18} />} Use my current location
           </button>
 
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 h-px bg-gray-200" />
-            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">or enter PIN code</span>
-            <div className="flex-1 h-px bg-gray-200" />
-          </div>
+          <div className="ac-muted" style={{ textAlign: 'center', fontSize: 14 }}>or enter a PIN code or area</div>
 
-          {/* Manual Input Form */}
-          <form onSubmit={handleManualSubmit} className="flex gap-2">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-3 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Enter 6-digit PIN (e.g. 560038) or City"
-                value={pinInput}
-                onChange={(e) => setPinInput(e.target.value)}
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:border-indigo-600 text-xs font-semibold"
-              />
+          <form className="ac-row" style={{ gap: 8 }} onSubmit={(e) => { e.preventDefault(); choose(pinInput); }}>
+            <div style={{ position: 'relative', flex: 1 }}>
+              <Search size={16} style={{ position: 'absolute', left: 14, top: 16, color: 'var(--slate)' }} />
+              <label className="ac-sr" htmlFor="loc-pin">PIN code or area</label>
+              <input id="loc-pin" className="ac-input" style={{ paddingLeft: 38 }} placeholder="e.g. 400069 or Andheri" value={pinInput} onChange={(e) => setPinInput(e.target.value)} />
             </div>
-            <button
-              type="submit"
-              disabled={loading || !pinInput.trim()}
-              className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-black text-white font-bold transition disabled:opacity-50 cursor-pointer"
-            >
-              Verify
-            </button>
+            <button className="ac-btn ac-btn-outline" disabled={loading || !pinInput.trim()}>Check</button>
           </form>
 
-          {statusMessage && (
-            <p className="text-emerald-700 bg-emerald-50 border border-emerald-200 p-2 rounded-xl text-center font-bold">
-              {statusMessage}
-            </p>
-          )}
+          {status && <div className="ac-storebox" role="status">{status}</div>}
+          {error && <div className="ac-warn" role="alert">{error}</div>}
 
-          {error && (
-            <p className="text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-xl text-center font-semibold">
-              {error}
-            </p>
-          )}
-
-          {/* Quick Hubs */}
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">
-              Popular Partner Store Hubs
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {POPULAR_HUBS.map((hub) => (
-                <button
-                  key={hub.pin}
-                  onClick={() => handleQuickSelect(hub.pin)}
-                  className="px-2.5 py-1.5 rounded-xl bg-gray-50 hover:bg-indigo-50 text-gray-700 hover:text-indigo-700 border border-gray-200 hover:border-indigo-200 font-semibold text-[11px] transition"
-                >
-                  📍 {hub.name}
-                </button>
-              ))}
+            <div className="ac-muted" style={{ fontSize: 14, marginBottom: 8 }}>Popular areas</div>
+            <div className="ac-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              {HUBS.map((h) => <button key={h.pin} className="ac-act" onClick={() => choose(h.pin)}>{h.name}</button>)}
             </div>
           </div>
 
-          {/* Privacy Notice */}
-          <div className="pt-2 border-t border-gray-100 flex items-start gap-2 text-[10px] text-gray-400 leading-relaxed">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-            <p>
-              Your coordinates are stored locally on your device and only sent during store searches to compute distance and 35-min delivery road ETAs.
-            </p>
-          </div>
+          <p className="ac-muted" style={{ fontSize: 13, margin: 0, display: 'flex', gap: 8 }}>
+            <ShieldCheck size={16} style={{ flexShrink: 0 }} /> Your location stays on this device. It is used only to find nearby stores and delivery times.
+          </p>
         </div>
       </div>
     </div>

@@ -22,13 +22,13 @@ const Fit = ({ points }) => {
 };
 
 /** Real map of partner stores. Click a pin to see the store and choose it. `stores` need latitude and longitude. */
-export default function StoreMap({ stores, customer, selectedId, onSelect, height = 420, radiusKm }) {
+export default function StoreMap({ stores, customer, selectedId, onSelect, height = 420, radiusKm, center: focus, zoom = 12, fitAll = true }) {
   const located = stores.filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
   const points = [...located.map((s) => [s.latitude, s.longitude]), ...(customer ? [[customer.lat, customer.lng]] : [])];
-  const center = customer ? [customer.lat, customer.lng] : [19.076, 72.8777];
+  const center = focus || (customer ? [customer.lat, customer.lng] : [19.076, 72.8777]);
   return (
     <div className="ac-map" style={{ height }}>
-      <MapContainer center={center} zoom={12} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
+      <MapContainer center={center} zoom={zoom} scrollWheelZoom style={{ height: '100%', width: '100%' }}>
         <TileLayer attribution="&copy; OpenStreetMap contributors" url="https://tile.openstreetmap.org/{z}/{x}/{y}.png" />
         {customer && <Marker position={[customer.lat, customer.lng]} icon={youIcon}><Popup>Your location</Popup></Marker>}
         {customer && radiusKm && <Circle center={[customer.lat, customer.lng]} radius={radiusKm * 1000} pathOptions={{ color: themeColor('brand'), weight: 1, fillOpacity: 0.05 }} />}
@@ -48,7 +48,7 @@ export default function StoreMap({ stores, customer, selectedId, onSelect, heigh
             </Marker>
           );
         })}
-        <Fit points={points} />
+        {fitAll && <Fit points={points} />}
       </MapContainer>
     </div>
   );

@@ -1,28 +1,33 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { MapPin, Store, Truck, Banknote, ShieldCheck, QrCode, Smartphone } from 'lucide-react';
+import { MapPin, Store, Truck, Banknote, ShieldCheck, QrCode, Smartphone, CreditCard } from 'lucide-react';
 import { useCart } from '../../hooks/useCart';
 import { useAuth } from '../../hooks/useAuth';
 import { useLocation } from '../../context/LocationContext';
 import { MumbaiStoreMap } from '../../components/map/MumbaiStoreMap';
 import UpiPay from '../../storefront/UpiPay';
+import RazorpayTest from '../../storefront/RazorpayTest';
 import { money, sized, firstImage } from '../../storefront/parts';
 import orderService from '../../services/orderService';
 import api from '../../services/api';
+import { lookupPin, pinMatchesCity } from '../../utils/geocode';
 import '../../storefront/storefront.css';
 import '../../storefront/forms.css';
 import '../../storefront/pages.css';
 
+const ONLINE = { id: 'Razorpay (Test Mode)', icon: CreditCard, title: 'Pay online (UPI, card, net banking)', text: 'Pay securely now and your order is confirmed at once. Test mode: no real money moves.' };
 const UPI_NOW = { id: 'UPI (Scan & Pay)', icon: QrCode, title: 'Pay now with UPI', text: 'Scan a QR and pay the seller directly. They confirm it and pack your order.' };
 const METHODS = {
   delivery: [
+    ONLINE,
+    UPI_NOW,
     { id: 'Cash on Delivery', icon: Banknote, title: 'Cash on delivery', text: 'Pay in cash when it arrives.' },
     { id: 'UPI or Card on Delivery', icon: Smartphone, title: 'UPI or card on delivery', text: 'Pay by UPI or card when it arrives. No cash needed.' },
-    UPI_NOW,
   ],
   pickup: [
-    { id: 'Pay at Store', icon: Store, title: 'Pay at the store', text: 'Pay when you collect your order, by cash, UPI or card.' },
+    ONLINE,
     UPI_NOW,
+    { id: 'Pay at Store', icon: Store, title: 'Pay at the store', text: 'Pay when you collect your order, by cash, UPI or card.' },
   ],
 };
 
@@ -38,9 +43,9 @@ export const Checkout = () => {
   const navigate = useNavigate();
 
   const [mode, setMode] = useState('delivery');
-  const [method, setMethod] = useState('Cash on Delivery');
+  const [method, setMethod] = useState(ONLINE.id);
   const [mapOpen, setMapOpen] = useState(false);
-  const [addr, setAddr] = useState({ fullName: user?.name || '', phone: user?.phone || '', addressLine: fromLoc(location).addressLine, city: fromLoc(location).city, state: fromLoc(location).state, pinCode: fromLoc(location).pinCode });
+  const [addr, setAddr] = useState({ fullName: user?.name || '', phone: user?.phone || '', flat: '', landmark: '', addressLine: fromLoc(location).addressLine, city: fromLoc(location).city, state: fromLoc(location).state, pinCode: fromLoc(location).pinCode });
   const [errors, setErrors] = useState({});
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -50,6 +55,27 @@ export const Checkout = () => {
   useEffect(() => { if (cartItems.length === 0 && !toPay) navigate('/cart', { replace: true }); }, [cartItems.length, toPay, navigate]);
 
   const set = (k, v) => setAddr((a) => ({ ...a, [k]: v }));
+
+  // Zero typing: name and phone come from the account, the address from the device location (asked once, on arrival).
+  useEffect(() => { setAddr((a) => ({ ...a, fullName: a.fullName || user?.name || '', phone: a.phone || user?.phone || '' })); }, [user]);
+  useEffect(() => {
+    api.get('/support/last-address').then((r) => { const l = r.data?.address; if (l) setAddr((a) => ({ ...a, addressLine: a.addressLine || l.addressLine || '', city: a.city || l.city || '', state: a.state || l.state || '', pinCode: a.pinCode || l.pinCode || '', phone: a.phone || l.phone || '', fullName: a.fullName || l.fullName || '' })); }).catch(() => {});
+    if (!(location?.source && location.source !== 'default') && location?.permissionStatus !== 'denied') requestBrowserLocation();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The PIN code and the city must agree. A valid PIN fills city and state; a PIN from another city is flagged.
+  const [pinNote, setPinNote] = useState({ ok: true, text: '' });
+  useEffect(() => {
+    if (!/^[1-9]\d{5}$/.test(addr.pinCode)) { setPinNote({ ok: true, text: '' }); return undefined; }
+    let live = true;
+    lookupPin(addr.pinCode).then((info) => {
+      if (!live) return;
+      if (!info) { setPinNote({ ok: false, text: 'We could not find this PIN code. Check it.' }); return; }
+      const ok = pinMatchesCity(info, addr.city);
+      setPinNote(ok ? { ok: true, text: `${info.areas[0]}, ${info.city}, ${info.state}` } : { ok: false, text: `This PIN belongs to ${info.city}, ${info.state}, but your city says "${addr.city}".`, fix: info });
+    });
+    return () => { live = false; };
+  }, [addr.pinCode, addr.city]);
   const storeId = selectedStore?.storeId || selectedStore?.id;
   const storeName = selectedStore?.storeName || selectedStore?.name;
 
@@ -68,6 +94,14 @@ export const Checkout = () => {
 
   const switchMode = (m) => { setMode(m); setMethod(METHODS[m][0].id); };
 
+  // Review first: when the saved location already gave a complete address, the form stays closed and the customer only confirms.
+  const [editing, setEditing] = useState(null);       // null = decide automatically
+  const [payOpen, setPayOpen] = useState(true); // every way to pay is listed up front, online first
+  const detailsDone = addr.fullName.trim() && addr.phone.replace(/\D/g, '').length >= 10
+    && (mode === 'pickup' || (addr.addressLine.trim() && /^[1-9]\d{5}$/.test(addr.pinCode)));
+  const showForm = editing === null ? !detailsDone : editing;
+  const chosenMethod = METHODS[mode].find((m) => m.id === method) || METHODS[mode][0];
+
   const validate = () => {
     const e = {};
     if (!addr.fullName.trim()) e.fullName = 'Enter your name.';
@@ -75,6 +109,7 @@ export const Checkout = () => {
     if (mode === 'delivery') {
       if (!addr.addressLine.trim()) e.addressLine = 'Enter your delivery address.';
       if (!/^[1-9]\d{5}$/.test(addr.pinCode)) e.pinCode = 'Enter a 6-digit PIN code.';
+      else if (!pinNote.ok) e.pinCode = pinNote.text;
     }
     if (mode === 'pickup' && !storeId) e.store = 'Choose the store where you will collect your order.';
     setErrors(e);
@@ -93,6 +128,7 @@ export const Checkout = () => {
   const place = async () => {
     const bad = validate();
     if (Object.keys(bad).length) {
+      setEditing(true);
       // Say so right here and take the customer to the first field that needs attention (the form is above this button).
       const order = [['fullName', 'c-name'], ['phone', 'c-phone'], ['addressLine', 'c-addr'], ['pinCode', 'c-pin'], ['store', 'checkout-store']];
       const first = order.find(([k]) => bad[k]);
@@ -104,7 +140,7 @@ export const Checkout = () => {
     try {
       const order = await orderService.createOrder({
         items: cartItems.map((i) => ({ id: i.id, quantity: i.quantity })), couponCode: coupon?.code || '', paymentMethod: method,
-        shippingAddress: { ...addr, ...(pin || {}), fulfillment: mode }, storeId: storeId || undefined,
+        shippingAddress: { ...addr, addressLine: [addr.flat, addr.addressLine].filter(Boolean).join(', '), ...(pin || {}), fulfillment: mode }, storeId: storeId || undefined,
       });
       if (order.paymentRequired) { setToPay(order); } else { clearCart(); navigate('/order-success', { state: { order } }); }
     } catch (e) {
@@ -119,7 +155,8 @@ export const Checkout = () => {
 
   return (
     <div className="ac ac-page"><div className="ac-wrap">
-      <h1 className="ac-display">Checkout</h1>
+      <h1 className="ac-display">Review your order</h1>
+      <p className="ac-muted" style={{ marginTop: 6 }}>Everything is filled in from your account and location. Check it and place your order.</p>
       <div className="ac-twocol" style={{ marginTop: 28 }}>
         <div>
           <div className="ac-box">
@@ -140,6 +177,23 @@ export const Checkout = () => {
             {errors.store && <div id="checkout-store" className="ac-warn" role="alert">{errors.store}</div>}
           </div>
 
+          {!showForm && (
+            <div className="ac-box" aria-label="Delivery summary">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ minWidth: 0 }}>
+                  <h2>{mode === 'delivery' ? 'Delivering to' : 'Collecting at'}</h2>
+                  <p style={{ margin: '10px 0 2px' }}><b>{addr.fullName}</b> · {addr.phone}</p>
+                  {mode === 'delivery'
+                    ? <p className="ac-muted" style={{ margin: 0 }}>{[addr.flat, addr.addressLine, addr.landmark && `Near ${addr.landmark}`, addr.city, addr.state].filter(Boolean).join(', ')} {addr.pinCode}</p>
+                    : <p className="ac-muted" style={{ margin: 0 }}>{storeId ? `${storeName}${selectedStore?.address ? `, ${selectedStore.address}` : ''}` : 'Choose a store above'}</p>}
+                  {mode === 'delivery' && !pinNote.ok && <p className="ac-warn" role="alert" style={{ marginTop: 8 }}>{pinNote.text}</p>}
+                </div>
+                <button type="button" className="ac-btn ac-btn-outline ac-btn-small" onClick={() => setEditing(true)}><Pencil size={14} /> Change</button>
+              </div>
+            </div>
+          )}
+
+          {showForm && (
           <div className="ac-box">
             <h2>{mode === 'delivery' ? 'Delivery details' : 'Your details'}</h2>
             <div className="ac-grid-2" style={{ marginTop: 14 }}>
@@ -147,7 +201,9 @@ export const Checkout = () => {
               <div className="ac-field"><label htmlFor="c-phone">Phone</label><input id="c-phone" className="ac-input" inputMode="tel" aria-invalid={!!errors.phone} value={addr.phone} onChange={(e) => set('phone', e.target.value)} autoComplete="tel" />{errors.phone && <span className="ac-err" role="alert">{errors.phone}</span>}</div>
               {mode === 'delivery' && (
                 <>
-                  <div className="ac-field" style={{ gridColumn: '1 / -1' }}><label htmlFor="c-addr">Address</label><input id="c-addr" className="ac-input" aria-invalid={!!errors.addressLine} value={addr.addressLine} onChange={(e) => set('addressLine', e.target.value)} placeholder="Flat, building, street, area" autoComplete="street-address" />{errors.addressLine && <span className="ac-err" role="alert">{errors.addressLine}</span>}</div>
+                  <div className="ac-field"><label htmlFor="c-flat">Flat / house / building</label><input id="c-flat" className="ac-input" value={addr.flat} onChange={(e) => set('flat', e.target.value)} placeholder="e.g. B-204, Sai Heights" autoComplete="address-line2" /></div>
+                  <div className="ac-field"><label htmlFor="c-land">Landmark (optional)</label><input id="c-land" className="ac-input" value={addr.landmark} onChange={(e) => set('landmark', e.target.value)} placeholder="e.g. Near Metro station" /></div>
+                  <div className="ac-field" style={{ gridColumn: '1 / -1' }}><label htmlFor="c-addr">Street and area</label><input id="c-addr" className="ac-input" aria-invalid={!!errors.addressLine} value={addr.addressLine} onChange={(e) => set('addressLine', e.target.value)} placeholder="Flat, building, street, area" autoComplete="street-address" />{errors.addressLine && <span className="ac-err" role="alert">{errors.addressLine}</span>}</div>
                   <div className="ac-field" style={{ gridColumn: '1 / -1' }}>
                     <button type="button" className="ac-btn ac-btn-outline ac-btn-small" onClick={requestBrowserLocation} disabled={locating} style={{ justifySelf: 'start' }}>
                       {locating ? 'Finding you…' : hasLocation ? 'Update from my current location' : 'Fill my address from my current location'}
@@ -155,15 +211,28 @@ export const Checkout = () => {
                     <small className="ac-muted" role="status">{hasLocation ? `Using ${location.displayName}. Check the details below and add your flat or building.` : 'We look up your street, area, city and PIN code. Nothing is saved until you place the order.'}</small>
                   </div>
                   <div className="ac-field"><label htmlFor="c-city">City</label><input id="c-city" className="ac-input" value={addr.city} onChange={(e) => set('city', e.target.value)} /></div>
-                  <div className="ac-field"><label htmlFor="c-pin">PIN code</label><input id="c-pin" className="ac-input" inputMode="numeric" maxLength={6} aria-invalid={!!errors.pinCode} value={addr.pinCode} onChange={(e) => set('pinCode', e.target.value.replace(/\D/g, ''))} autoComplete="postal-code" />{errors.pinCode && <span className="ac-err" role="alert">{errors.pinCode}</span>}</div>
+                  <div className="ac-field"><label htmlFor="c-state">State</label><input id="c-state" className="ac-input" value={addr.state} onChange={(e) => set('state', e.target.value)} autoComplete="address-level1" /></div>
+                  <div className="ac-field"><label htmlFor="c-pin">PIN code</label><input id="c-pin" className="ac-input" inputMode="numeric" maxLength={6} aria-invalid={!!errors.pinCode} value={addr.pinCode} onChange={(e) => set('pinCode', e.target.value.replace(/\D/g, ''))} autoComplete="postal-code" />{errors.pinCode && <span className="ac-err" role="alert">{errors.pinCode}</span>}
+                    {!errors.pinCode && pinNote.text && <small role="status" style={{ color: pinNote.ok ? 'var(--ok)' : 'var(--coral)' }}>{pinNote.ok ? '✓ ' : ''}{pinNote.text}{pinNote.fix && <> <button type="button" className="ac-textlink" onClick={() => setAddr((a) => ({ ...a, city: pinNote.fix.city, state: pinNote.fix.state }))}>Use {pinNote.fix.city}</button></>}</small>}
+                  </div>
                 </>
               )}
             </div>
+            {detailsDone && <button type="button" className="ac-btn ac-btn-outline ac-btn-small" style={{ marginTop: 14 }} onClick={() => setEditing(false)}>Done</button>}
           </div>
+          )}
 
           <div className="ac-box">
-            <h2>Payment</h2>
-            <div style={{ display: 'grid', gap: 10, marginTop: 14 }} role="radiogroup" aria-label="Payment method">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <h2>Payment</h2>
+            </div>
+            {!payOpen && (
+              <div className="ac-pay" data-on="true" style={{ marginTop: 14 }}>
+                <chosenMethod.icon size={22} color="var(--brand)" />
+                <span><b>{chosenMethod.title}</b><small>{chosenMethod.text}</small></span>
+              </div>
+            )}
+            {payOpen && <div style={{ display: 'grid', gap: 10, marginTop: 14 }} role="radiogroup" aria-label="Payment method">
               {METHODS[mode].map((m) => {
                 const isUpi = m.id.startsWith('UPI (');
                 const off = isUpi && upi.checked && !upi.available;
@@ -175,8 +244,8 @@ export const Checkout = () => {
                   </label>
                 );
               })}
-            </div>
-            <p className="ac-muted" style={{ fontSize: 14, margin: '12px 0 0' }}><ShieldCheck size={14} /> No card details are taken on this site. Cash and pay-at-store orders stay unpaid until you pay.</p>
+            </div>}
+            <p className="ac-muted" style={{ fontSize: 14, margin: '12px 0 0' }}><ShieldCheck size={14} /> Online payments run in test mode, and card details never touch this site. Cash and pay-at-store orders stay unpaid until you pay.</p>
           </div>
         </div>
 
@@ -194,13 +263,15 @@ export const Checkout = () => {
             <div className="ac-sum-total"><dt>Total</dt><dd>{money(finalTotal - (mode === 'pickup' ? deliveryCharge : 0))}</dd></div>
           </dl>
           {error && <div id="checkout-error" className="ac-warn" role="alert" style={{ marginBottom: 10 }}>{error}</div>}
-          <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={place} disabled={busy}>{busy ? 'Placing your order…' : method.startsWith('UPI (') ? 'Continue to UPI payment' : 'Place order'}</button>
+          <button className="ac-btn ac-btn-blue" style={{ width: '100%' }} onClick={place} disabled={busy}>{busy ? 'Placing your order…' : method.startsWith('UPI (') ? 'Continue to UPI payment' : method.startsWith('Razorpay') ? 'Continue to payment' : 'Place order'}</button>
           <Link to="/cart" className="ac-textlink" style={{ display: 'block', textAlign: 'center', marginTop: 12 }}>Back to cart</Link>
         </aside>
       </div>
 
       {mapOpen && <MumbaiStoreMap isOpen onClose={() => setMapOpen(false)} />}
-      {toPay && <UpiPay order={toPay} onSubmitted={() => finishPaid(toPay)} onClose={leaveUnpaid} />}
+      {toPay && (toPay.paymentMethod?.startsWith('Razorpay')
+        ? <RazorpayTest order={toPay} user={user} onPaid={(o) => finishPaid(o || toPay)} onClose={leaveUnpaid} />
+        : <UpiPay order={toPay} onSubmitted={() => finishPaid(toPay)} onClose={leaveUnpaid} />)}
     </div></div>
   );
 };

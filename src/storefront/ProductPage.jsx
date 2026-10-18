@@ -57,7 +57,7 @@ export default function ProductPage() {
 
   useEffect(() => {
     if (!product) return;
-    api.get('/stores/nearby', { params: { lat: location?.lat || 19.1136, lng: location?.lng || 72.8697, radius: 40, productId: product.id } })
+    api.get('/stores/nearby', { params: { lat: location?.lat || 19.1136, lng: location?.lng || 72.8697, radius: 25, productId: product.id } })
       .then((r) => setStores(r.data?.stores || [])).catch(() => setStores([]));
   }, [product, location?.lat, location?.lng]);
 
@@ -90,7 +90,7 @@ export default function ProductPage() {
   const liked = isInWishlist(product.id);
   const maxQty = Math.max(1, Math.min(stock, 20));
   const nearest = stores?.[0];
-  const specs = Object.entries(product.specifications || {});
+  const specs = Object.entries(product.specifications || {}).filter(([k]) => !/^source|usd to inr/i.test(k)); // internal import details are not for shoppers
   const highlights = specs.slice(0, 4);
   const warranty = specs.find(([k]) => /warrant/i.test(k));
   const quickAnswers = [

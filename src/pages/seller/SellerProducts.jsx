@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Check, History, Zap } from 'lucide-react';
+import { Camera, Check, History, PackagePlus, Search, Zap } from 'lucide-react';
 import api from '../../services/api';
 import { sized } from '../../storefront/parts';
 
@@ -50,6 +50,16 @@ function Row({ p, onChanged, flash }) {
           <div style={{ minWidth: 0 }}>
             <Link to={`/products/${p.id}`} className="ac-prodname">{p.name}</Link>
             <small className="ac-muted">{Number(p.rating || 0).toFixed(1)} ★ · {p.reviewCount} reviews</small>
+            <div className="ac-row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              <span className="ac-chip-status" data-tone={p.stock <= 0 ? 'bad' : p.stock <= 10 ? 'warn' : 'ok'}>{p.stockStatus || (p.stock <= 0 ? 'Out of stock' : 'In stock')} · {p.stock} left</span>
+              <span className="ac-chip-status" data-tone={p.unitsSold ? 'info' : undefined}>{p.unitsSold ? `Bought: ${p.unitsSold} sold in ${p.orderCount} order${p.orderCount > 1 ? 's' : ''}${p.lastBought ? ` · last ${p.lastBought}` : ''}` : 'Not bought yet'}</span>
+              {p.openOrders > 0 && <span className="ac-chip-status" data-tone="warn">{p.openOrders} order{p.openOrders > 1 ? 's' : ''} to pack</span>}
+            </div>
+            {p.buyers?.length > 0 && (
+              <details style={{ marginTop: 6 }}><summary className="ac-muted" style={{ cursor: 'pointer', fontSize: 14 }}>Who bought it ({p.buyers.length}{p.orderCount > p.buyers.length ? ` of ${p.orderCount}` : ''})</summary>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 14 }}>{p.buyers.map((b) => <li key={b.orderId}>{b.name} × {b.quantity}{b.phone ? ` · ${b.phone}` : ''} · {b.date} · {b.status} · {b.orderId}</li>)}</ul>
+              </details>
+            )}
           </div>
         </div>
         <label className="ac-fld"><span>Price (₹)</span><input className="ac-input ac-cell-input" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} aria-invalid={!!err.price} /></label>
@@ -99,12 +109,40 @@ function Row({ p, onChanged, flash }) {
 
 export default function SellerProducts({ products, onChanged }) {
   const [saved, setSaved] = useState('');
+  const [q, setQ] = useState('');
+  const [view, setView] = useState('all');
   const flash = (t) => { setSaved(t); window.setTimeout(() => setSaved(''), 3000); };
+  const shown = products.filter((p) => (!q || `${p.name} ${p.category}`.toLowerCase().includes(q.toLowerCase()))
+    && (view === 'all' || (view === 'low' && p.stock > 0 && p.stock <= 10) || (view === 'out' && p.stock <= 0)));
+  const low = products.filter((p) => p.stock > 0 && p.stock <= 10).length;
+  const out = products.filter((p) => p.stock <= 0).length;
   return (
     <section id="products" className="ac-box" aria-labelledby="prod-h" style={{ marginTop: 24 }}>
-      <div className="ac-row-between"><h2 id="prod-h">Your products</h2>{saved && <span className="ac-chip-status" data-tone="ok" role="status"><Check size={13} />&nbsp;{saved}</span>}</div>
-      <p className="ac-muted" style={{ marginTop: 4 }}>Change stock by hand any time, or switch on <b>Auto-restock</b> and AutoCart tops it up for you after sales.</p>
-      <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>{products.map((p) => <Row key={`${p.id}-${p.stock}-${p.price}-${p.image}`} p={p} onChanged={onChanged} flash={flash} />)}</div>
+      <div className="ac-row-between"><h2 id="prod-h">Your products ({products.length})</h2>{saved && <span className="ac-chip-status" data-tone="ok" role="status"><Check size={13} />&nbsp;{saved}</span>}</div>
+      {products.length === 0 ? (
+        <div className="ac-emptyprod">
+          <PackagePlus size={40} />
+          <b>No products yet</b>
+          <p className="ac-muted">Add your first product above: a name, price, stock and a photo. It appears in the store straight away, and this is where you will update stock and prices later.</p>
+          <a href="#add-product" className="ac-btn ac-btn-blue ac-btn-small" onClick={() => document.getElementById('add-product')?.setAttribute('open', '')}>Add your first product</a>
+        </div>
+      ) : (
+        <>
+          <p className="ac-muted" style={{ marginTop: 4 }}>Change stock by hand any time, or switch on <b>Auto-restock</b> and AutoCart tops it up for you after sales.</p>
+          <div className="ac-row" style={{ gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
+            <label className="ac-search ac-prodsearch"><Search size={16} aria-hidden="true" /><span className="ac-sr">Search your products</span><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search your products" /></label>
+            <div className="ac-seg ac-seg-sm" role="group" aria-label="Show">
+              <button data-on={view === 'all'} onClick={() => setView('all')}>All</button>
+              <button data-on={view === 'low'} onClick={() => setView('low')}>Almost gone ({low})</button>
+              <button data-on={view === 'out'} onClick={() => setView('out')}>Out of stock ({out})</button>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gap: 12, marginTop: 14 }}>
+            {shown.map((p) => <Row key={`${p.id}-${p.stock}-${p.price}-${p.image}`} p={p} onChanged={onChanged} flash={flash} />)}
+            {shown.length === 0 && <p className="ac-muted">No product matches.</p>}
+          </div>
+        </>
+      )}
     </section>
   );
 }

@@ -29,6 +29,8 @@ def apply_auto_restock(product):
     """After a sale: if the seller's rule is on and stock has fallen to the reorder level, add their usual top-up."""
     if product.autoRestock and product.restockQty > 0 and product.stock <= product.reorderLevel:
         set_stock(product, product.stock + product.restockQty, 'auto-restock', by='auto-restock rule')
+        from .automation import owner_of, record   # imported here: automation needs the views, which import this module
+        record('seller', owner_of(product.seller), 'auto_restock', f'{product.name}: added {product.restockQty} units (stock was at or below {product.reorderLevel}).', product.id)
         return True
     return False
 

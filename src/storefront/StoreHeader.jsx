@@ -7,6 +7,7 @@ import { useCart } from '../hooks/useCart';
 import { useLocation } from '../context/LocationContext';
 import LocationPickerModal from '../components/navbar/LocationPickerModal';
 import { BrandLink, CategoryIcon } from './Brand';
+import NotificationBell from './NotificationBell';
 import './storefront.css';
 
 let categoryCache = null; // categories rarely change; fetch once per visit
@@ -77,8 +78,9 @@ export default function StoreHeader() {
           <div className="ac-actions">
             {isAdmin && <Link to="/admin" className="ac-icon-btn"><span className="ac-label">Admin console</span></Link>}
             {user?.role === 'SELLER' && <Link to="/seller/dashboard" className="ac-icon-btn"><span className="ac-label">Seller centre</span></Link>}
+            <NotificationBell />
             {user && <Link to="/support" className="ac-icon-btn" aria-label="Support tickets"><LifeBuoy size={20} /><span className="ac-label">Help</span></Link>}
-            <Link to={user ? '/profile' : '/login'} className="ac-icon-btn" aria-label={firstName ? `Account for ${firstName}` : 'Sign in'}>
+            <Link to={!user ? '/login' : user.role === 'SELLER' ? '/seller/dashboard' : user.role === 'ADMIN' ? '/admin' : '/profile'} className="ac-icon-btn" aria-label={firstName ? `Account for ${firstName}` : 'Sign in'}>
               <User size={20} /><span className="ac-label">{firstName || 'Sign in'}</span>
             </Link>
             <Link to="/cart" className={`ac-icon-btn ${bump ? 'ac-bump' : ''}`} aria-label={`Cart, ${itemCount || 0} items`}>

@@ -6,7 +6,7 @@ import { useAuth } from '../../hooks/useAuth';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import { emailPattern } from '../../utils/validators';
-import RoleTabs from './RoleTabs';
+import ProfileAvatar from './ProfileAvatar';
 import { LogIn, Lock, Mail, ShieldAlert } from 'lucide-react';
 
 export const Login = () => {
@@ -62,7 +62,7 @@ export const Login = () => {
   return (
     <div className="ac ac-auth">
       <div className="bg-white rounded-3xl border border-gray-100 p-8 shadow-xl space-y-6">
-        {location.state?.customerOnly ? <p className="text-center text-sm font-semibold text-gray-700">Sign in with your customer account to buy.</p> : <RoleTabs current="customer" />}
+        {location.state?.customerOnly && <p className="text-center text-sm font-semibold text-gray-700">Sign in to buy.</p>}
         <div className="text-center space-y-2">
           <div className="w-12 h-12 rounded-2xl bg-indigo-600 text-white font-extrabold text-2xl flex items-center justify-center mx-auto shadow-md">
             A
@@ -121,12 +121,24 @@ export const Login = () => {
         </form>
 
         <div className="text-center text-xs text-gray-500 pt-2 border-t">
-          <div className="mb-2"><Link to="/seller/login" className="text-indigo-600 font-semibold hover:underline">Seller sign in</Link></div>
           Don't have an account?{' '}
           <Link to="/register" className="text-indigo-600 font-bold hover:underline">
             Register Now
           </Link>
         </div>
+
+        {/* Business access lives in its own section, so shoppers never see a role switch on the sign-in form. */}
+        <section aria-label="Business access" className="ac-biz">
+          <p className="ac-biz-title">Run a store or the marketplace?</p>
+          <Link to="/seller/login" className="ac-biz-card">
+            <ProfileAvatar role="seller" size={48} />
+            <span><b>Seller</b><small>Sign in, or apply to sell on AutoCart</small></span>
+          </Link>
+          <Link to="/admin/login" className="ac-biz-card">
+            <ProfileAvatar role="admin" size={48} />
+            <span><b>Admin</b><small>Marketplace console for staff</small></span>
+          </Link>
+        </section>
       </div>
       <CatalogPulse />
     </div>

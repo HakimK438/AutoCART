@@ -1,10 +1,15 @@
-"""Orders and payments: the server decides prices and payment status, and orders stay private. No payment gateway is used."""
+"""Orders and payments: the server decides prices and payment status, and orders stay private. Online payment is Razorpay in test mode."""
+
+import os
+from unittest.mock import patch
 
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from api.models import Coupon, Order, Payment, Product, SellerApplication, Store, User
+from api.models import Coupon, Order, OrderFulfillment, Payment, Product, SellerApplication, Store, StoreInventory, User
 from api.views import generate_token
+
+NO_KEYS = {'RAZORPAY_KEY_ID': '', 'RAZORPAY_KEY_SECRET': ''}
 
 
 def authed(user):
@@ -64,7 +69,8 @@ class OrderTests(TestCase):
         pod = self.place(items=[{'id': 'p2', 'quantity': 1}], paymentMethod='UPI or Card on Delivery').json()
         self.assertEqual((pod['paymentStatus'], pod['status'], pod['paymentRequired']), ('Pending', 'Confirmed', False))
         self.assertEqual(self.place(paymentMethod='UPI').status_code, 400)  # unknown methods are refused
-        self.assertEqual(self.place(paymentMethod='Razorpay (Test Mode)').status_code, 400)  # the gateway is gone
+        online = self.place(paymentMethod='Razorpay (Test Mode)').json()  # online payment: unpaid until the signature is verified
+        self.assertEqual((online['paymentStatus'], online['status'], online['paymentRequired']), ('Awaiting Payment', 'Pending', True))
 
     def test_pay_at_store_needs_a_store(self):
         self.assertEqual(self.place(paymentMethod='Pay at Store').status_code, 400)
@@ -187,3 +193,209 @@ class UpiScanAndPayTests(TestCase):
         self.assertEqual((yes['available'], yes['payee']), (True, 'Sita Stores'))
         mixed = c.post('/api/payments/upi-check', {'items': [{'id': 'p1'}, {'id': 'p2'}]}, format='json').json()
         self.assertEqual(mixed['available'], False)
+
+
+@patch.dict(os.environ, NO_KEYS)
+class RazorpayTests(TestCase):
+    """Online payment. With no keys it is a labelled local demo of the same signed flow; the server checks the signature."""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(email='alice@example.com', name='Alice', password='pw-12345')
+        self.bob = User.objects.create_user(email='bob@example.com', name='Bob', password='pw-12345')
+        self.a, self.b = authed(self.alice), authed(self.bob)
+        Product.objects.create(id='p1', name='Mouse', slug='mouse', category='Electronics', price=1000, stock=5)
+        res = self.a.post('/api/orders', {'items': [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'Razorpay (Test Mode)', 'shippingAddress': {'fullName': 'Alice'}}, format='json').json()
+        self.oid, self.created = res['id'], res
+
+    def start(self, client=None):
+        return (client or self.a).post('/api/payments/razorpay/order', {'orderId': self.oid}, format='json')
+
+    def sign(self, pay, outcome='success'):
+        return self.a.post('/api/payments/razorpay/demo-sign', {'orderId': self.oid, 'razorpayOrderId': pay['razorpayOrderId'], 'outcome': outcome}, format='json')
+
+    def test_an_online_order_waits_for_payment(self):
+        self.assertTrue(self.created['paymentRequired'])
+        o = Order.objects.get(id=self.oid)
+        self.assertEqual((o.paymentStatus, o.status), ('Awaiting Payment', 'Pending'))
+
+    def test_config_reports_demo_mode_without_keys_and_never_a_secret(self):
+        cfg = APIClient().get('/api/payments/config').json()
+        self.assertEqual((cfg['mode'], cfg['keyId']), ('demo', ''))
+
+    def test_amount_comes_from_the_stored_order(self):
+        res = self.a.post('/api/payments/razorpay/order', {'orderId': self.oid, 'amount': 1}, format='json').json()
+        self.assertEqual((res['amount'], res['currency'], res['demo']), (100000, 'INR', True))  # 1000 rupees in paise
+
+    def test_demo_payment_succeeds_and_marks_the_order_paid(self):
+        sig = self.sign(self.start().json()).json()
+        done = self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json')
+        self.assertEqual(done.status_code, 200, done.content)
+        o = Order.objects.get(id=self.oid)
+        self.assertEqual((o.paymentStatus, o.status), ('Paid', 'Confirmed'))
+        self.assertEqual(Payment.objects.get(orderId=self.oid).status, 'PAID')
+
+    def test_a_forged_signature_is_rejected(self):
+        pay = self.start().json()
+        res = self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, 'razorpay_order_id': pay['razorpayOrderId'],
+                                                           'razorpay_payment_id': 'pay_fake', 'razorpay_signature': 'deadbeef'}, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(Order.objects.get(id=self.oid).paymentStatus, 'Failed')
+        self.assertEqual(self.start().status_code, 200)  # the customer can try again
+
+    def test_a_declined_test_payment_stays_unpaid(self):
+        self.assertEqual(self.sign(self.start().json(), 'failure').status_code, 402)
+        self.assertNotEqual(Order.objects.get(id=self.oid).paymentStatus, 'Paid')
+
+    def test_someone_else_cannot_pay_or_verify_my_order(self):
+        self.assertEqual(self.start(self.b).status_code, 404)
+        self.assertEqual(self.start(APIClient()).status_code, 401)
+        sig = self.sign(self.start().json()).json()
+        self.assertEqual(self.b.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json').status_code, 404)
+
+    def test_a_signature_cannot_be_used_twice(self):
+        sig = self.sign(self.start().json()).json()
+        self.assertEqual(self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json').status_code, 200)
+        self.assertEqual(self.a.post('/api/payments/razorpay/verify', {'orderId': self.oid, **sig}, format='json').status_code, 400)
+
+    def test_cash_orders_do_not_need_online_payment(self):
+        cod = self.a.post('/api/orders', {'items': [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'Cash on Delivery'}, format='json').json()['id']
+        self.assertEqual(self.a.post('/api/payments/razorpay/order', {'orderId': cod}, format='json').status_code, 400)
+
+    def test_live_keys_are_refused(self):
+        with patch.dict(os.environ, {'RAZORPAY_KEY_ID': 'rzp_live_abc', 'RAZORPAY_KEY_SECRET': 'secret'}):
+            self.assertEqual(self.start().status_code, 503)
+
+    def test_admin_overview_shows_the_razorpay_mode_and_no_secret(self):
+        admin = authed(User.objects.create_user(email='boss@example.com', name='Boss', password='pw-12345', role='ADMIN'))
+        d = admin.get('/api/payments/status').json()
+        self.assertEqual((d['razorpay']['mode'], d['razorpay']['connection']), ('demo', None))
+        self.assertEqual(self.a.get('/api/payments/status').status_code, 403)
+        with patch.dict(os.environ, {'RAZORPAY_KEY_ID': 'rzp_test_ABCDEFGH1234', 'RAZORPAY_KEY_SECRET': 'topsecretvalue'}), \
+                patch('api.order_views.requests.get', return_value=type('Ok', (), {'status_code': 200})()):
+            text = admin.get('/api/payments/status').content.decode()
+        self.assertIn('"test"', text)
+        self.assertNotIn('topsecretvalue', text)
+
+
+class NearestStoreTests(TestCase):
+    """A delivery order is packed by the nearest store that has every item, not by one fixed seller pin."""
+
+    def setUp(self):
+        self.alice = User.objects.create_user(email='alice@example.com', name='Alice', password='pw-12345')
+        self.a = authed(self.alice)
+        Product.objects.create(id='p1', name='Mouse', slug='mouse', category='Electronics', price=1000, stock=5)
+        self.near = Store.objects.create(id='near', name='AutoCart Near', address='x', city='Kalyan', pincode='421301', latitude=19.23, longitude=73.14)
+        self.far = Store.objects.create(id='far', name='AutoCart Far', address='y', city='Andheri', pincode='400069', latitude=19.11, longitude=72.87)
+        for st in (self.near, self.far):
+            StoreInventory.objects.create(id=f'inv-{st.id}', store=st, product_id='p1', availableQuantity=5, storePrice=1000)
+
+    def place(self, lat=19.229, lng=73.142, **over):
+        body = {'items': [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'Cash on Delivery',
+                'shippingAddress': {'fullName': 'Alice', 'addressLine': 'Kolsewadi', 'city': 'Kalyan', 'latitude': lat, 'longitude': lng}, **over}
+        return self.a.post('/api/orders', body, format='json')
+
+    def test_the_nearest_store_with_stock_packs_it(self):
+        oid = self.place().json()['id']
+        ful = OrderFulfillment.objects.get(order_id=oid)
+        self.assertEqual(ful.store_id, 'near')
+        self.assertLess(ful.distanceKm, 3)
+        track = self.a.get(f'/api/orders/{oid}/tracking').json()
+        self.assertEqual(track['fulfilledBy']['storeName'], 'AutoCart Near')
+
+    def test_a_store_without_stock_is_skipped(self):
+        StoreInventory.objects.filter(store_id='near').update(availableQuantity=0)
+        ful = OrderFulfillment.objects.get(order_id=self.place().json()['id'])
+        self.assertEqual(ful.store_id, 'far')
+
+    def test_an_online_order_is_not_packable_until_it_is_paid(self):
+        res = self.place(paymentMethod='Razorpay (Test Mode)').json()
+        self.assertEqual((res['paymentStatus'], res['paymentRequired']), ('Awaiting Payment', True))
+
+
+class OrderLifecycleTests(TestCase):
+    """Packed is not the end: out for delivery, delivered, the customer is told at each step, and the sale is recorded for the seller."""
+
+    def setUp(self):
+        self.cust = User.objects.create_user(email='cathy@example.com', name='Cathy Customer', password='pw-12345')
+        self.other = User.objects.create_user(email='other@example.com', name='Other', password='pw-12345')
+        self.s1 = User.objects.create_user(email='s1@example.com', name='Sita One', password='pw-12345', role='SELLER')
+        self.s2 = User.objects.create_user(email='s2@example.com', name='Ravi Two', password='pw-12345', role='SELLER')
+        for u, name in ((self.s1, 'Sita Stores'), (self.s2, 'Ravi Mart')):
+            SellerApplication.objects.create(id=f'app-{u.id}', ownerUserId=u.id, applicantName=u.name, companyName=name, email=u.email, phone='9820012345', status='APPROVED')
+        Product.objects.create(id='p1', name='Steel Flask', slug='flask', category='Home', seller='Sita Stores', price=500, stock=10)
+        self.c, self.o, self.a, self.b = authed(self.cust), authed(self.other), authed(self.s1), authed(self.s2)
+        res = self.c.post('/api/orders', {'items': [{'id': 'p1', 'quantity': 2}], 'paymentMethod': 'Cash on Delivery',
+                                          'shippingAddress': {'fullName': 'Cathy', 'phone': '9820099999', 'addressLine': '12 Hill Rd', 'city': 'Mumbai'}}, format='json').json()
+        self.oid = res['id']
+
+    def step(self, name, client=None):
+        return (client or self.a).post(f'/api/seller/orders/{self.oid}/{name}')
+
+    def titles(self):
+        return [n['title'] for n in self.c.get('/api/notifications').json()['items']]
+
+    def test_the_order_goes_through_every_step_and_the_customer_is_told_each_time(self):
+        self.assertEqual(self.step('pack').status_code, 200)
+        self.assertEqual(self.step('dispatch').json()['status'], 'Out for Delivery')
+        done = self.step('deliver').json()
+        self.assertEqual((done['status'], done['paymentStatus']), ('Delivered', 'Paid'))  # cash collected at the door
+        order = Order.objects.get(id=self.oid)
+        self.assertEqual((order.status, order.paymentStatus), ('Delivered', 'Paid'))
+        self.assertEqual(self.titles(), ['Your product has reached you', 'Your order is on its way', 'Your order is packed', 'Order placed'])
+        track = self.c.get(f'/api/orders/{self.oid}/tracking').json()
+        self.assertTrue(all(s['completed'] for s in track['timeline']))  # every courier step is ticked
+        self.assertEqual(track['orderStatus'], 'Delivered')
+
+    def test_steps_must_happen_in_order(self):
+        self.assertEqual(self.step('dispatch').status_code, 400)  # not packed yet
+        self.assertEqual(self.step('deliver').status_code, 400)
+        self.step('pack')
+        self.assertEqual(self.step('deliver').status_code, 400)  # not sent out yet
+        self.step('dispatch')
+        self.assertEqual(self.step('dispatch').status_code, 400)  # only once
+        self.assertEqual(self.step('pack').status_code, 400)
+
+    def test_only_the_seller_of_the_product_can_move_the_order(self):
+        self.assertEqual(self.step('pack', self.b).status_code, 404)  # another seller
+        self.assertEqual(self.step('pack', self.c).status_code, 403)  # a customer
+        self.assertEqual(Order.objects.get(id=self.oid).status, 'Confirmed')
+
+    def test_the_delivered_sale_is_recorded_on_the_seller_dashboard(self):
+        before = self.a.get('/api/seller/overview').json()
+        self.assertEqual((before['revenue'], before['deliveredRevenue'], before['unitsSold']), (1000, 0, 2))  # counted as soon as it is bought
+        row = next(o for o in before['orders'] if o['id'] == self.oid)
+        self.assertEqual((row['canPack'], row['canDispatch'], row['canDeliver']), (True, False, False))
+        self.step('pack')
+        self.assertTrue(next(o for o in self.a.get('/api/seller/overview').json()['orders'] if o['id'] == self.oid)['canDispatch'])
+        self.step('dispatch')
+        self.assertTrue(next(o for o in self.a.get('/api/seller/overview').json()['orders'] if o['id'] == self.oid)['canDeliver'])
+        self.step('deliver')
+        after = self.a.get('/api/seller/overview').json()
+        self.assertEqual((after['revenue'], after['deliveredRevenue'], after['deliveredOrders'], after['unitsSold']), (1000, 1000, 1, 2))
+
+    def test_a_delivered_order_can_be_returned_and_not_cancelled(self):
+        for name in ('pack', 'dispatch', 'deliver'):
+            self.step(name)
+        self.assertEqual(self.c.post(f'/api/orders/{self.oid}/cancel').status_code, 400)
+        self.assertEqual(self.c.post(f'/api/orders/{self.oid}/return').status_code, 200)
+
+    def test_notifications_are_private_and_can_be_marked_read(self):
+        self.step('pack')
+        mine = self.c.get('/api/notifications').json()
+        self.assertEqual(mine['unread'], 2)  # order placed, packed
+        self.assertEqual(self.o.get('/api/notifications').json()['items'], [])  # someone else sees none of it
+        self.assertEqual(APIClient().get('/api/notifications').status_code, 401)
+        self.o.post('/api/notifications/read', {})  # another user cannot clear mine
+        self.assertEqual(self.c.get('/api/notifications').json()['unread'], 2)
+        self.c.post('/api/notifications/read', {'id': mine['items'][0]['id']}, format='json')
+        self.assertEqual(self.c.get('/api/notifications').json()['unread'], 1)
+        self.c.post('/api/notifications/read', {}, format='json')
+        self.assertEqual(self.c.get('/api/notifications').json()['unread'], 0)
+
+    def test_a_pickup_order_becomes_ready_for_pickup_then_collected(self):
+        Store.objects.create(id='s9', name='AutoCart Pick Store', address='x', city='Mumbai', pincode='400069', latitude=19.1, longitude=72.8)
+        oid = self.c.post('/api/orders', {'items': [{'id': 'p1', 'quantity': 1}], 'paymentMethod': 'Pay at Store', 'storeId': 's9', 'shippingAddress': {'fullName': 'Cathy'}}, format='json').json()['id']
+        self.a.post(f'/api/seller/orders/{oid}/pack')
+        self.assertEqual(self.a.post(f'/api/seller/orders/{oid}/dispatch').json()['status'], 'Ready for Pickup')
+        self.assertEqual(self.a.post(f'/api/seller/orders/{oid}/deliver').json()['status'], 'Delivered')
+        self.assertIn('Thanks for collecting your order', [n['title'] for n in self.c.get('/api/notifications').json()['items']])

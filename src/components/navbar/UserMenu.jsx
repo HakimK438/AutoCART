@@ -81,6 +81,13 @@ export const UserMenu = () => {
               </Link>
             )}
 
+            {user?.role === 'SELLER' && (
+              <Link to="/seller/dashboard" onClick={() => setIsOpen(false)} className="flex items-center gap-2.5 px-4 py-2 text-sm text-indigo-600 font-semibold hover:bg-indigo-50">
+                <LayoutDashboard className="w-4 h-4" />
+                Seller Dashboard
+              </Link>
+            )}
+
             <Link
               to="/profile"
               onClick={() => setIsOpen(false)}

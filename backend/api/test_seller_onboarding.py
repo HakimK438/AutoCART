@@ -23,7 +23,7 @@ TEXTS = {
     'pan_other': 'INCOME TAX DEPARTMENT\nZZZZZ9999Z\nName\nPriya Nair\nFather\'s Name\nSuresh Nair\nDate of Birth\n02/02/1990',
     'gst': 'GSTIN: 27ABCDE1234F1Z5\nLegal Name: Sharma Electronics',
     'addr': 'Sharma Electronics 12 Hill Road Andheri East Mumbai 400069',
-    'bank': 'IFSC: HDFC0001234 A/c No 123456789012',
+    'bank': 'HDFC Bank\nAccount Holder Name: Rahul Sharma\nIFSC: HDFC0001234 A/c No 123456789012',
 }
 
 
@@ -77,8 +77,7 @@ class SellerOnboardingTests(TestCase):
         return res.json()['id']
 
     def upload_all(self, app_id, pan_file='pan.png'):
-        for t, f in (('AADHAAR', 'aadhaar.png'), ('PAN', pan_file), ('GST_CERTIFICATE', 'gst.png'),
-                     ('ADDRESS_PROOF', 'addr.png'), ('BANK_PROOF', 'bank.png'), ('STORE_PHOTO', 'shop.jpg')):
+        for t, f in (('AADHAAR', 'aadhaar.png'), ('PAN', pan_file), ('BANK_PROOF', 'bank.png')):
             self.assertEqual(upload(self.c, app_id, t, f).status_code, 201)
 
     # -- who can see what --
@@ -97,6 +96,26 @@ class SellerOnboardingTests(TestCase):
         app_id = self.start()
         res = self.c.post(f'/api/admin/seller-applications/{app_id}/action', {'action': 'APPROVE'}, format='json')
         self.assertEqual(res.status_code, 403)
+
+    def test_three_documents_fill_the_whole_application(self):
+        files = {k: SimpleUploadedFile(n, b'x', content_type='image/png') for k, n in (('aadhaar', 'aadhaar.png'), ('pan', 'pan.png'), ('bank', 'bank.png'))}
+        with patch('api.seller_docs.lookup_pin', return_value={'city': 'Mumbai', 'state': 'Maharashtra'}), \
+                patch('api.seller_docs.lookup_ifsc', return_value={'branch': 'Andheri'}), \
+                patch('api.seller_views._geocode', return_value=(19.1136, 72.8697)):
+            res = self.c.post('/api/seller/applications/autofill', files, format='multipart')
+        self.assertEqual(res.status_code, 200, res.content)
+        d = res.json()
+        self.assertEqual((d['applicantName'], d['pan'], d['pincode'], d['city'], d['addressState']), ('Rahul Sharma', 'ABCDE1234F', '400069', 'Mumbai', 'Maharashtra'))
+        self.assertEqual(d['address'], '12 Hill Road Andheri East')
+        self.assertEqual(d['companyName'], 'Rahul Store')
+        self.assertEqual((d['store']['latitude'], d['store']['longitude']), (19.1136, 72.8697))
+        self.assertEqual(d['identity']['accountHolder'], 'Rahul Sharma')
+        self.assertEqual(d['autofill']['problems'], {})
+        self.assertEqual(self.c.post(f"/api/seller/applications/{d['id']}/submit").json()['status'], 'PENDING_ADMIN_APPROVAL')
+
+    def test_login_account_that_is_still_a_customer_can_resume(self):
+        self.c.post('/api/seller/applications/start')
+        self.assertEqual(len(self.c.get('/api/seller/applications').json()), 1)
 
     def test_bad_form_is_rejected_with_field_errors(self):
         res = self.c.post('/api/seller/applications', {**FORM, 'pan': '123', 'storeLatitude': None}, format='json')
@@ -164,7 +183,7 @@ class SellerOnboardingTests(TestCase):
         self.assertEqual(p['plannedProducts'][0]['name'], 'Wireless Mouse')
         self.assertEqual(p['identity']['aadhaarMasked'], 'XXXX-XXXX-4821')
         self.assertEqual(p['identity']['pan'], 'ABCDE1234F')
-        self.assertEqual(len(p['documents']), 6)
+        self.assertEqual(len(p['documents']), 3)
 
     def test_approval_creates_seller_store_and_role(self):
         app_id = self.start()

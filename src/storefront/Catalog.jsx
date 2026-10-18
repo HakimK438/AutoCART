@@ -74,6 +74,9 @@ export default function Catalog() {
       .then(([p, c, s]) => { setProducts(asList(p.data)); setCategories(asList(c.data)); setSummary(s.data); setState('ready'); })
       .catch(() => setState('error'));
   }, []);
+  // Any change to the URL filters (also from the header's category links) starts again at page 1.
+  const filterKey = [q, category, brands.join(','), min, max, rating, deal, inStock, low, sort].join('|');
+  useEffect(() => { setPage(1); }, [filterKey]);
   useEffect(() => { document.title = `${category || (q ? `“${q}”` : 'Shop')} | AutoCart`; }, [category, q]);
 
   const tones = useMemo(() => tonesFor(categories), [categories]);
@@ -99,7 +102,8 @@ export default function Catalog() {
   }, [products, q, category, brands.join(','), min, max, rating, deal, inStock, low, sort]);
 
   const pages = Math.max(1, Math.ceil(rows.length / PAGE));
-  const shown = rows.slice((page - 1) * PAGE, page * PAGE);
+  const current = Math.min(page, pages);
+  const shown = rows.slice((current - 1) * PAGE, current * PAGE);
 
   const chips = [
     q && { k: 'q', label: `“${q}”`, off: { q: '' } },
@@ -204,9 +208,9 @@ export default function Catalog() {
       )}
       {pages > 1 && (
         <nav className="ac-row" style={{ justifyContent: 'center', marginTop: 40 }} aria-label="Pages">
-          <button className="ac-btn ac-btn-small ac-btn-outline" disabled={page === 1} onClick={() => { setPage(page - 1); window.scrollTo({ top: 0 }); }}>Previous</button>
-          <span className="ac-muted">Page {page} of {pages}</span>
-          <button className="ac-btn ac-btn-small ac-btn-outline" disabled={page === pages} onClick={() => { setPage(page + 1); window.scrollTo({ top: 0 }); }}>Next</button>
+          <button className="ac-btn ac-btn-small ac-btn-outline" disabled={current === 1} onClick={() => { setPage(current - 1); window.scrollTo({ top: 0 }); }}>Previous</button>
+          <span className="ac-muted">Page {current} of {pages}</span>
+          <button className="ac-btn ac-btn-small ac-btn-outline" disabled={current === pages} onClick={() => { setPage(current + 1); window.scrollTo({ top: 0 }); }}>Next</button>
         </nav>
       )}
     </div></div>

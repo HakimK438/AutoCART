@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
@@ -21,6 +21,12 @@ const Fit = ({ points }) => {
  */
 export default function OrderRouteMap({ pickup, drop, height = 340 }) {
   const [route, setRoute] = useState(null); // { line, km, minutes } | { failed: true }
+  const [me, setMe] = useState(null); // the customer's live position, when they allow it
+  useEffect(() => {
+    if (!navigator.geolocation) return undefined;
+    const id = navigator.geolocation.watchPosition((p) => setMe([p.coords.latitude, p.coords.longitude]), () => {}, { enableHighAccuracy: true, maximumAge: 15000 });
+    return () => navigator.geolocation.clearWatch(id);
+  }, []);
   const a = [pickup.lat, pickup.lng];
   const b = [drop.lat, drop.lng];
 
@@ -47,12 +53,16 @@ export default function OrderRouteMap({ pickup, drop, height = 340 }) {
           <Polyline positions={line} pathOptions={{ color: '#d9480f', weight: 5, dashArray: route?.line ? undefined : '8 8' }} />
           <Marker position={a}><Popup><b>Pickup</b><br />{pickup.name}</Popup></Marker>
           <Marker position={b}><Popup><b>Deliver to</b><br />{drop.name}</Popup></Marker>
-          <Fit points={[a, b]} />
+          {me && <CircleMarker center={me} radius={9} pathOptions={{ color: '#fff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 }}><Popup><b>You are here</b><br />Your current location</Popup></CircleMarker>}
+          <Fit points={me ? [a, b, me] : [a, b]} />
         </MapContainer>
       </div>
       <p style={{ margin: '10px 0 0', fontWeight: 600 }} role="status">
         {route?.km ? `${route.km.toFixed(1)} km by road, about ${route.minutes} min.` : route?.failed ? 'Straight-line view only (the road routing service did not respond).' : 'Finding the best road route…'}
         {' '}<a href={directions} target="_blank" rel="noreferrer">Open turn-by-turn directions</a>
+      </p>
+      <p className="ac-muted" style={{ fontSize: 14, margin: '4px 0 0' }}>
+        <span style={{ color: '#d9480f', fontWeight: 700 }}>● Order / store</span> · <span style={{ color: '#1a73e8', fontWeight: 700 }}>● {me ? 'You, right now' : 'Your location (allow location to see live position)'}</span>
       </p>
       <p className="ac-muted" style={{ fontSize: 14, margin: '4px 0 0' }}>From {pickup.name}{pickup.address ? `, ${pickup.address}` : ''} to {drop.address || drop.name}.</p>
     </div>

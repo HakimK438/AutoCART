@@ -121,7 +121,7 @@ def _validate_form(data) -> dict:
         errors['email'] = 'Enter a valid business email.'
     if not re.fullmatch(r'[A-Z]{5}[0-9]{4}[A-Z]', get('pan').upper()):
         errors['pan'] = 'PAN must look like ABCDE1234F.'
-    if not re.fullmatch(GSTIN_REGEX, get('gstin').upper()):
+    if get('gstin') and not re.fullmatch(GSTIN_REGEX, get('gstin').upper()):  # optional: only checked when given
         errors['gstin'] = 'GSTIN must be 15 characters, like 27ABCDE1234F1Z5.'
     if not get('address'):
         errors['address'] = 'Enter the store address.'
@@ -133,10 +133,7 @@ def _validate_form(data) -> dict:
             errors['location'] = 'The pin must be on the map inside India.'
     except (TypeError, ValueError):
         errors['location'] = 'Drop the pin on the map where your store is.'
-    products = data.get('plannedProducts') or []
-    if not isinstance(products, list) or not [p for p in products if str(p.get('name', '')).strip()]:
-        errors['plannedProducts'] = 'Add at least one product you plan to sell.'
-    return errors
+    return errors  # products are added later, from the seller dashboard
 
 
 # ------------------------------------------------------------------- views --
@@ -174,7 +171,7 @@ def seller_applications_view(request):
     fields = {
         'companyName': str(data['companyName']).strip(), 'storeName': str(data.get('storeName') or data['companyName']).strip(),
         'applicantName': str(data['contactName']).strip(), 'email': str(data['email']).strip().lower(),
-        'phone': str(data['phone']).strip(), 'gstin': str(data['gstin']).strip().upper(), 'pan': str(data['pan']).strip().upper(),
+        'phone': str(data['phone']).strip(), 'gstin': str(data.get('gstin') or '').strip().upper(), 'pan': str(data['pan']).strip().upper(),
         'businessType': str(data.get('businessType') or 'Retailer'), 'address': str(data['address']).strip(),
         'city': str(data.get('city') or '').strip(), 'addressState': str(data.get('state') or '').strip(),
         'pincode': str(data['pincode']).strip(), 'storeLatitude': float(data['storeLatitude']),
@@ -229,6 +226,54 @@ def seller_application_detail_view(request, pk):
     return Response(_profile(app, user))
 
 
+def _save_upload(app, doc_type, upload):
+    """Saves one uploaded file (replacing the previous one of that type). Reading happens separately so several files can be read at once."""
+    for old in app.documents.filter(docType=doc_type):  # one file per type: a new upload replaces the old one
+        old.file.delete(save=False)
+        old.delete()
+    doc = SellerDocument(id=f"doc-{uuid.uuid4().hex[:8]}", application=app, docType=doc_type, fileName=upload.name[:255],
+                         mimeType=upload.content_type or '', sizeBytes=upload.size)
+    doc.file.save(upload.name, upload, save=False)
+    doc.save()
+    return doc
+
+
+def _apply_result(app, doc, result):
+    """Stores what the reader found on the document row."""
+    doc.ocrStatus, doc.extractedFields = result['ocrStatus'], result['extractedFields']
+    doc.redactedText, doc.confidence, doc.warnings = result['redactedText'], result['confidence'], result['warnings']
+    doc.save()
+    if doc.docType == 'AADHAAR':
+        app.aadhaarLast4 = (doc.extractedFields or {}).get('aadhaarLast4', '')
+        app.save(update_fields=['aadhaarLast4'])
+    if doc.ocrStatus == 'REJECTED':  # an unmasked Aadhaar is not kept at all
+        doc.file.delete(save=False)
+        doc.file = ''
+        doc.save()
+    return doc
+
+
+def _store_document(app, doc_type, upload):
+    """Saves one uploaded file, reads it with OCR and returns the SellerDocument."""
+    doc = _save_upload(app, doc_type, upload)
+    return _apply_result(app, doc, seller_docs.process_document(doc_type, doc.file.path, doc.mimeType))
+
+
+def _geocode(address, city, pincode):
+    """Latitude and longitude for the store address, from OpenStreetMap (street first, then the PIN code alone), then our built-in PIN table."""
+    import requests
+    for q in (f'{address}, {city}, {pincode}, India', f'{pincode}, India'):
+        try:
+            hits = requests.get('https://nominatim.openstreetmap.org/search', params={'q': q, 'format': 'json', 'limit': 1, 'countrycodes': 'in'},
+                                headers={'User-Agent': 'AutoCart-seller-onboarding/1.0'}, timeout=3).json()
+            if hits:
+                return float(hits[0]['lat']), float(hits[0]['lon'])
+        except Exception:
+            continue
+    hit = resolve_coordinates(pincode or '')
+    return (hit[0], hit[1]) if hit else (None, None)
+
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @parser_classes([MultiPartParser, FormParser])
@@ -255,27 +300,60 @@ def seller_application_documents_view(request, pk):
     if doc_type in IMAGE_ONLY and not (upload.content_type or '').startswith('image/'):
         return Response({'detail': 'The store photo must be an image.'}, status=http.HTTP_400_BAD_REQUEST)
 
-    for old in app.documents.filter(docType=doc_type):  # one file per type: a new upload replaces the old one
-        old.file.delete(save=False)
-        old.delete()
-    doc = SellerDocument(id=f"doc-{uuid.uuid4().hex[:8]}", application=app, docType=doc_type, fileName=upload.name[:255],
-                         mimeType=upload.content_type or '', sizeBytes=upload.size)
-    doc.file.save(upload.name, upload, save=False)
-    doc.save()
-
-    result = seller_docs.process_document(doc_type, doc.file.path, doc.mimeType)
-    doc.ocrStatus, doc.extractedFields = result['ocrStatus'], result['extractedFields']
-    doc.redactedText, doc.confidence, doc.warnings = result['redactedText'], result['confidence'], result['warnings']
-    doc.save()
-
-    if doc_type == 'AADHAAR':
-        app.aadhaarLast4 = (doc.extractedFields or {}).get('aadhaarLast4', '')
-        app.save(update_fields=['aadhaarLast4'])
-    if doc.ocrStatus == 'REJECTED':  # an unmasked Aadhaar is not kept at all
-        doc.file.delete(save=False)
-        doc.file = ''
-        doc.save()
+    doc = _store_document(app, doc_type, upload)
     return Response(_doc_json(doc, _is_admin(user)), status=http.HTTP_201_CREATED)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+@parser_classes([MultiPartParser, FormParser])
+def seller_application_autofill_view(request):
+    """The whole onboarding in one call: the seller uploads the Aadhaar, PAN and bank proof, we read them and fill every field
+    (name, PAN, address, city, PIN, store name, bank details, map pin). Nothing is submitted; the seller reviews and can change anything."""
+    user, err = _require(request)
+    if err:
+        return err
+    app = SellerApplication.objects.filter(ownerUserId=user.id).exclude(status__in=FINAL_STATES).first()
+    if not app:
+        app = SellerApplication.objects.create(id=f"app-{uuid.uuid4().hex[:8]}", ownerUserId=user.id, status='DRAFT', applicantName=user.name, email=user.email.lower(),
+                                               phone=user.phone or '', companyName=f"{user.name} (store not named yet)", city='Mumbai')
+        _audit(app, '', 'DRAFT', 'APPLICATION_STARTED', user.email, 'Seller started an application.')
+    if app.status not in EDITABLE_STATES:
+        return Response({'detail': 'This application can no longer be changed.'}, status=http.HTTP_409_CONFLICT)
+
+    uploads = {'AADHAAR': request.FILES.get('aadhaar'), 'PAN': request.FILES.get('pan'), 'BANK_PROOF': request.FILES.get('bank')}
+    if not any(uploads.values()):
+        return Response({'detail': 'Choose your Aadhaar, PAN card and bank proof to continue.'}, status=http.HTTP_400_BAD_REQUEST)
+    problems, saved = {}, {}
+    for doc_type, upload in uploads.items():
+        if not upload:
+            continue
+        check = DocumentOCRService.validate_document_upload(upload.name, upload.size, upload.content_type or '')
+        if not check['valid']:
+            problems[doc_type] = check['error']
+            continue
+        saved[doc_type] = _save_upload(app, doc_type, upload)
+    # All the files are read at the same time, which is what makes the upload fast.
+    results = seller_docs.process_many({t: (d.file.path, d.mimeType) for t, d in saved.items()})
+    for doc_type, doc in saved.items():
+        _apply_result(app, doc, results[doc_type])
+        if doc.ocrStatus == 'REJECTED':
+            problems[doc_type] = (doc.warnings or ['This document could not be used.'])[0]
+    docs = list(app.documents.all())
+    fill = seller_docs.build_autofill(user, app, docs)
+    for key, value in fill['fields'].items():
+        setattr(app, key, value)
+    if app.address and app.pincode:
+        lat, lng = _geocode(app.address, app.city, app.pincode)
+        if lat is not None:
+            app.storeLatitude, app.storeLongitude = lat, lng
+    ident = seller_docs.merge_identity(docs)
+    app.identityDetails = ident
+    app.save()
+    _audit(app, app.status, app.status, 'DOCUMENTS_AUTOFILLED', user.email, f"Filled from documents: {', '.join(sorted(fill['fields'])) or 'nothing readable'}.")
+    data = _profile(app, user)
+    data['autofill'] = {'sources': fill['sources'], 'bank': fill['bank'], 'problems': problems, 'filled': sorted(fill['fields'])}
+    return Response(data)
 
 
 @api_view(['POST'])
@@ -415,6 +493,10 @@ def admin_seller_application_action_view(request, pk):
         Store.objects.filter(sellerId=app.sellerId).update(operatingStatus='Closed')
     app.save()
     _audit(app, previous, new_status, action, user.email, reason)
+    if request.data.get('auto'):   # the admin used the application autopilot: keep a visible record of what it did
+        from .automation import record
+        record('admin', user.id, {'APPROVE': 'auto_approve', 'REQUEST_INFO': 'auto_reminder'}.get(action, 'auto_' + action.lower()),
+               f"{app.companyName or app.applicantName}: {'approved' if action == 'APPROVE' else 'reminder sent' if action == 'REQUEST_INFO' else action.lower()} by autopilot.", app.id)
     return Response({'success': True, 'applicationId': app.id, 'previousStatus': previous, 'currentStatus': new_status,
                      'profile': _profile(app, user)})
 
@@ -436,12 +518,20 @@ def admin_seller_detail_view(request, seller_id):
     ids = {p.id for p in products}
     orders = [o for o in Order.objects.exclude(status='Cancelled') if any(str(i.get('id')) in ids for i in (o.items or []))]
     earn = analytics(products)['earnings'] if products else {'gross': 0, 'commission': 0, 'youKeep': 0}
+    sold = {}  # units sold per product, from real orders
+    for o in orders:
+        for i in o.items or []:
+            if str(i.get('id')) in ids:
+                sold[str(i.get('id'))] = sold.get(str(i.get('id')), 0) + int(i.get('quantity') or 0)
     return Response({
         'seller': {'id': seller.id, 'name': seller.name, 'companyName': seller.companyName, 'email': seller.email, 'phone': seller.phone,
                    'city': seller.city, 'status': seller.status, 'joinedDate': seller.joinedDate, 'rating': seller.rating},
         'live': {'products': len(products), 'orders': len(orders), 'revenue': earn['gross'], 'commission': earn['commission'],
-                 'lowStock': sum(1 for p in products if 0 < p.stock <= 10), 'outOfStock': sum(1 for p in products if p.stock <= 0)},
-        'products': [{'id': p.id, 'name': p.name, 'price': p.price, 'stock': p.stock} for p in products[:12]],
+                 'lowStock': sum(1 for p in products if 0 < p.stock <= 10), 'outOfStock': sum(1 for p in products if p.stock <= 0),
+                 'inStock': sum(1 for p in products if p.stock > 10), 'units': sum(sold.values()), 'stockUnits': sum(max(p.stock, 0) for p in products)},
+        'products': [{'id': p.id, 'name': p.name, 'category': p.category, 'price': p.price, 'stock': p.stock,
+                      'status': 'Out of stock' if p.stock <= 0 else ('Low stock' if p.stock <= 10 else 'In stock'),
+                      'sold': sold.get(p.id, 0), 'image': (p.images or [''])[0] if isinstance(p.images, list) else ''} for p in products[:500]],
         'application': _profile(app, user) if app else None,
     })
 
@@ -465,3 +555,163 @@ def seller_application_product_image_view(request, pk):
     if problem:
         return Response({'detail': problem}, status=http.HTTP_400_BAD_REQUEST)
     return Response({'url': url})
+
+
+# City centres (public coordinates): the map pin for a seller that has no store of its own yet.
+CITY_CENTRES = {
+    'Mumbai': (19.0760, 72.8777, 'Maharashtra'), 'Bengaluru': (12.9716, 77.5946, 'Karnataka'), 'New Delhi': (28.6139, 77.2090, 'Delhi'),
+    'Pune': (18.5204, 73.8567, 'Maharashtra'), 'Gurugram': (28.4595, 77.0266, 'Haryana'), 'Surat': (21.1702, 72.8311, 'Gujarat'),
+    'Kolkata': (22.5726, 88.3639, 'West Bengal'), 'Jaipur': (26.9124, 75.7873, 'Rajasthan'), 'Chandigarh': (30.7333, 76.7794, 'Chandigarh'),
+    'Hyderabad': (17.3850, 78.4867, 'Telangana'), 'Dehradun': (30.3165, 78.0322, 'Uttarakhand'),
+}
+
+
+# Mumbai localities used to spread Mumbai sellers across the map when a seller has no exact store pin yet.
+MUMBAI_AREAS = [
+    ('Bandra West', 19.0596, 72.8295), ('Andheri West', 19.1364, 72.8296), ('Powai', 19.1176, 72.9060), ('Borivali West', 19.2307, 72.8567),
+    ('Lower Parel', 18.9938, 72.8258), ('Colaba', 18.9067, 72.8147), ('Dadar', 19.0178, 72.8478), ('Juhu', 19.1075, 72.8263),
+    ('Malad West', 19.1874, 72.8484), ('Goregaon East', 19.1663, 72.8526), ('Kurla', 19.0726, 72.8845), ('Ghatkopar', 19.0860, 72.9081),
+    ('Mulund West', 19.1726, 72.9425), ('Chembur', 19.0522, 72.9005), ('Worli', 19.0176, 72.8179), ('Vile Parle', 19.0990, 72.8446),
+    ('Byculla', 18.9780, 72.8335),
+]
+
+
+def mumbai_area_for(seller_id):
+    """A stable Mumbai locality for a seller (same seller, same area, every time)."""
+    return MUMBAI_AREAS[sum(ord(c) for c in str(seller_id)) % len(MUMBAI_AREAS)]
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_sellers_overview_view(request):
+    """Every seller in one table for the admin: contact, store location and live numbers worked out from real products and orders."""
+    from .models import Order
+    user, err = _require(request, ADMIN_ROLES)
+    if err:
+        return err
+    orders = [o for o in Order.objects.exclude(status='Cancelled')]
+    rows = []
+    for seller in Seller.objects.all():
+        company = seller.companyName or seller.name
+        names = {n for n in (company, seller.name) if n}  # products are filed under the trading name or the legal name
+        app = SellerApplication.objects.filter(sellerId=seller.id).first() or SellerApplication.objects.filter(companyName__in=names, status='APPROVED').first()
+        store = Store.objects.filter(sellerId=seller.id).exclude(latitude=0).first() or Store.objects.filter(seller__in=names).exclude(latitude=0).first()
+        products = list(Product.objects.filter(seller__in=names))
+        ids = {p.id for p in products}
+        units = revenue = to_pack = 0
+        for o in orders:
+            mine = [i for i in (o.items or []) if str(i.get('id')) in ids]
+            if mine:
+                units += sum(int(i.get('quantity') or 0) for i in mine)
+                revenue += sum(float(i.get('price') or 0) * int(i.get('quantity') or 0) for i in mine)
+                to_pack += 1 if o.status in ('Confirmed', 'Processing', 'Pending', 'Order Placed') else 0
+        lat = (app.storeLatitude if app and app.storeLatitude else None) or (store.latitude if store and store.latitude else None)
+        lng = (app.storeLongitude if app and app.storeLongitude else None) or (store.longitude if store and store.longitude else None)
+        approx = False
+        if lat is None and seller.city == 'Mumbai':  # no exact store: a stable Mumbai locality, flagged as approximate
+            _area, lat, lng = mumbai_area_for(seller.id)
+            approx = True
+        elif lat is None and seller.city in CITY_CENTRES:  # no exact store: show the city centre and say so
+            lat, lng, _state = CITY_CENTRES[seller.city]
+            approx = True
+        rows.append({
+            'id': seller.id, 'name': seller.name, 'companyName': company, 'status': seller.status, 'email': seller.email or (app.email if app else ''),
+            'phone': seller.phone or (app.phone if app else '') or (store.phone if store else ''), 'city': seller.city or (store.city if store else ''),
+            'address': (app.address if app else '') or (store.address if store else ''), 'lat': lat, 'lng': lng, 'approxLocation': approx,
+            'products': len(products), 'unitsSold': units, 'revenue': round(revenue), 'ordersToPack': to_pack,
+            'lowStock': sum(1 for p in products if 0 < p.stock <= 10), 'outOfStock': sum(1 for p in products if p.stock <= 0), 'joined': seller.joinedDate,
+        })
+    rows.sort(key=lambda r: -r['revenue'])
+    return Response({
+        'sellers': rows,
+        'totals': {'sellers': len(rows), 'products': sum(r['products'] for r in rows), 'revenue': sum(r['revenue'] for r in rows), 'ordersToPack': sum(r['ordersToPack'] for r in rows),
+                   'pendingApplications': SellerApplication.objects.filter(status__in=['PENDING_ADMIN_APPROVAL', 'NEEDS_MANUAL_REVIEW']).count(),
+                   'stillFilling': SellerApplication.objects.filter(status='DRAFT').count()},
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_seller_report_view(request):
+    """Seller report for the admin: sales, commission, delivery record, stock health and a 30-day trend per seller, all from real orders."""
+    import datetime
+    from django.utils import timezone
+    from .commission import fee_for
+    from .models import Order
+    user, err = _require(request, ADMIN_ROLES)
+    if err:
+        return err
+    today = timezone.localdate()
+    days = [today - datetime.timedelta(days=i) for i in range(29, -1, -1)]
+    orders = list(Order.objects.all())
+    out = []
+    for seller in Seller.objects.all():
+        names = {n for n in (seller.companyName, seller.name) if n}
+        products = list(Product.objects.filter(seller__in=names))
+        by_id = {p.id: p for p in products}
+        revenue = fees = units = 0.0
+        n_orders = delivered = cancelled = 0
+        trend = {d: 0.0 for d in days}
+        per_product = {}
+        for o in orders:
+            mine = [i for i in (o.items or []) if str(i.get('id')) in by_id]
+            if not mine:
+                continue
+            if o.status == 'Cancelled':
+                cancelled += 1
+                continue
+            n_orders += 1
+            delivered += 1 if o.status == 'Delivered' else 0
+            try:
+                day = datetime.date.fromisoformat(str(o.date)[:10])
+            except ValueError:
+                day = None
+            for i in mine:
+                q = int(i.get('quantity') or 0)
+                amount = float(i.get('price') or 0) * q
+                revenue += amount
+                units += q
+                fees += fee_for(by_id[str(i.get('id'))].category, amount)
+                per_product[i.get('name')] = per_product.get(i.get('name'), 0) + amount
+                if day in trend:
+                    trend[day] += amount
+        top = max(per_product.items(), key=lambda kv: kv[1]) if per_product else None
+        out.append({
+            'id': seller.id, 'name': seller.name, 'companyName': seller.companyName or seller.name, 'city': seller.city, 'status': seller.status,
+            'products': len(products), 'orders': n_orders, 'units': int(units), 'revenue': round(revenue), 'commission': round(fees), 'youKeep': round(revenue - fees),
+            'avgOrder': round(revenue / n_orders) if n_orders else 0, 'deliveredPercent': round(100 * delivered / n_orders) if n_orders else None,
+            'cancelled': cancelled, 'lowStock': sum(1 for x in products if 0 < x.stock <= 10), 'outOfStock': sum(1 for x in products if x.stock <= 0),
+            'topProduct': top[0] if top else '', 'trend': [round(trend[d]) for d in days],
+        })
+    out.sort(key=lambda r: -r['revenue'])
+    total = sum(r['revenue'] for r in out)
+    selling = [r for r in out if r['orders']]
+    insights = []
+    if selling and total:
+        lead = selling[0]
+        share = round(100 * lead['revenue'] / total)
+        insights.append({'level': 'warn' if share >= 70 else 'info', 'text': f"{lead['name']} brings in {share}% of all seller sales{' - the marketplace leans heavily on one seller.' if share >= 70 else '.'}"})
+    quiet = [r for r in out if r['status'] == 'Approved' and not r['orders']]
+    if quiet:
+        insights.append({'level': 'info', 'text': f"{len(quiet)} approved seller{'s have' if len(quiet) > 1 else ' has'} no orders yet: {', '.join(r['name'] for r in quiet[:3])}{'...' if len(quiet) > 3 else ''}."})
+    slow = [r for r in selling if r['deliveredPercent'] is not None and r['deliveredPercent'] < 50 and r['orders'] >= 2]
+    if slow:
+        insights.append({'level': 'warn', 'text': f"Fewer than half of orders are delivered for {', '.join(r['name'] for r in slow[:3])}. Worth a check."})
+    stock = [r for r in out if r['outOfStock']]
+    if stock:
+        insights.append({'level': 'info', 'text': f"{sum(r['outOfStock'] for r in stock)} products are out of stock across {len(stock)} seller{'s' if len(stock) > 1 else ''}."})
+    return Response({
+        'days': [d.strftime('%d %b') for d in days], 'sellers': out, 'insights': insights,
+        'totals': {'revenue': total, 'commission': sum(r['commission'] for r in out), 'orders': sum(r['orders'] for r in out), 'sellersWithSales': len(selling), 'sellers': len(out)},
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def admin_triage_view(request):
+    """Autopilot triage: reads every application waiting for a decision and recommends what to do. It never decides: the admin confirms."""
+    from . import triage
+    user, err = _require(request, ADMIN_ROLES)
+    if err:
+        return err
+    return Response(triage.triage_all())
