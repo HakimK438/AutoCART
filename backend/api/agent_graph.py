@@ -68,6 +68,8 @@ class State(TypedDict, total=False):
     over_budget: bool
     contact: Optional[Dict[str, Any]]
     fallback: str
+    kind: str   # the kind of product asked for ('phone', 'laptop'...)
+    alt: str    # 'none': we have none of what was named, these are the same kind from other brands. 'topup': a few of them were added
 
 
 # ---------------------------------------------------------------- retrieval --
@@ -278,6 +280,50 @@ def detect_brand(text: str) -> str:
 
 ACCESSORY = {'charger', 'case', 'cover', 'cable', 'adapter', 'protector', 'strap', 'stand', 'holder', 'pouch', 'skin', 'accessories'}
 
+# The catalogue only has broad categories ("Electronics"), so the KIND of a product (phone, laptop, speaker...) is read from its name.
+# Order matters: an "iPhone charger" is an accessory, not a phone, and a "Galaxy Tab" is a tablet, not a phone.
+KIND_RULES = [
+    ('accessory', r'\b(charger|case|cover|cable|adapter|protector|strap|stand|holder|pouch|skin|battery pack|power bank|airpower|screen guard|tempered)\b'),
+    ('tablet', r'\b(ipad|tablet|tab)\b'),
+    ('laptop', r'\b(laptop|macbook|notebook|chromebook|vivobook|zenbook|thinkpad|ideapad|inspiron|pavilion|aspire|xps)\b'),
+    ('phone', r'\b(iphone|smartphone|phone|mobile|galaxy\s*(?:s|a|m|z|f|note)\s*\d+|redmi|poco|realme|oneplus|pixel\s*\d+|nokia)\b'),
+    ('audio', r'\b(airpods|earbuds?|earphones?|headphones?|neckband|airdopes|buds)\b'),
+    ('speaker', r'\b(speaker|homepod|soundbar|boombox|bullhorn|megaphone)\b'),
+    ('watch', r'\b(smartwatch|watch|smart band|fitness band)\b'),
+    ('tv', r'\b(television|tv)\b'),
+    ('shoes', r'\b(shoes?|sneakers?|sandals?|slippers?|boots?|loafers?)\b'),
+    ('camera', r'\b(camera|dslr|gopro)\b'),
+]
+KIND_LABEL = {'phone': 'phones', 'laptop': 'laptops', 'audio': 'earphones and headphones', 'tablet': 'tablets', 'speaker': 'speakers', 'watch': 'watches',
+              'tv': 'TVs', 'shoes': 'shoes', 'camera': 'cameras'}
+
+
+def _kind(text: str) -> str:
+    low = text.lower()
+    return next((kind for kind, rx in KIND_RULES if re.search(rx, low)), '')
+
+
+def product_kind(p: Product) -> str:
+    """'phone', 'laptop', 'speaker'... or '' when the name does not say."""
+    return _kind(p.name)
+
+
+def query_kind(text: str) -> str:
+    """The kind of product a shopper asked for ("iphone", "phones" and "mobile" are all 'phone'), or '' when they named no kind (a brand alone, say)."""
+    return _kind(' '.join(SYNONYMS.get(w, w) for w in re.findall(r'[a-z0-9]+', text.lower())))
+
+
+KIND_WORDS = set('''phone phones smartphone smartphones mobile mobiles laptop laptops notebook tablet tablets headphones headphone earbuds earphones earphone speaker speakers
+watch watches smartwatch tv television shoes camera cameras'''.split())  # a request for the kind itself, with no brand or model
+
+
+def by_kind(found: List[Product], kind: str, brand: str = '') -> List[Product]:
+    """Keeps only products of the kind asked for ("iphone" must not bring a HomePod, "iphone charger" must not bring a phone).
+    A product whose name does not say its kind is kept only when it is from the brand the shopper named ("boat headphones" -> boAt Rockerz)."""
+    if not kind:
+        return found
+    return [p for p in found if product_kind(p) == kind or (not product_kind(p) and brand and (p.brand or '').lower() == brand.lower())]
+
 
 def _alt_queries(query: str) -> List[str]:
     """When a misspelt word could mean two catalogue words ("airpodes" is AirPods or Airdopes), the query rewritten with the other reading."""
@@ -321,6 +367,8 @@ def _match(query: str, limit: int = 5):
         if name & ACCESSORY and not set(toks) & ACCESSORY:  # "iphone" means the phone, not its charger or case
             weight -= 0.5
         scored.append((weight, p.stock > 0, p.rating or 0, p, len(hit) == len(toks)))
+    if toks and any(s[0] > 0 for s in scored):  # some products match the product word: the rest of the brand's range is not an answer ("iphone" -> a HomePod)
+        scored = [s for s in scored if s[0] > 0]
     scored.sort(key=lambda x: (-x[0], not x[1], -x[2]))
     if not scored or (not brand and scored[0][0] == 0):
         return brand, False, []
@@ -440,6 +488,7 @@ def buy(state: State) -> State:
     p = Product.objects.filter(id=pick['id']).first() if pick else None
     if not p:
         brand, exact, found = match_products(nlu.clean_query(state['message']) or state['message'])
+        found = by_kind(found, query_kind(nlu.clean_query(state['message'])), brand)  # "buy iphone" lists phones, not the charger or the case
         if not found:
             what = f' from {brand}' if brand else ''
             return {'reply': f"I could not find anything{what} in our stores right now. Tell me the product or brand you want, like \"Nike running shoes\".", 'actions': ['Show me popular products'], 'provider': 'rules'}
@@ -587,16 +636,20 @@ def retrieve(state: State) -> State:
     if state['intent'] == 'faq':
         return {'passages': passages or [t for _, t in POLICY[:2]], 'products': []}
     toks = [t for t in _tokens(q) if t not in GENERIC and t not in FILLER]
-    if not toks:  # "show me popular products", "a gift under 1500": browse the shelves
+    kind = query_kind(q) or query_kind(nlu.clean_query(msg))  # "iphone", "phones", "mobile" -> 'phone'. Checked first: "phone" is a filler word, so toks can be empty
+    if not toks and not kind:  # "show me popular products", "a gift under 1500": browse the shelves
         pool = [p for p in Product.objects.filter(stock__gt=0) if _within(p, lo, hi)]
         near = product_qa.near_map([p.id for p in pool], loc)
         ordered = _order(pool, sort or 'rating', near)
         return {'products': [product_dict(p) for p in _diverse(ordered)], 'passages': passages}
-    if len(toks) == 1 and toks[0] not in VOCAB.get() and not toks[0].isdigit() and not detect_brand(q):
+    if len(toks) == 1 and toks[0] not in VOCAB.get() and not toks[0].isdigit() and not detect_brand(q) and not query_kind(q):
         return {'products': [], 'passages': passages}  # one word we have never seen: say so, rather than showing look-alikes
     brand, _, found = match_products(q, 8)
-    if brand:  # the customer named a company: show only that company's products
-        prods = found
+    found = by_kind(found, kind, brand)
+    if kind and kind != 'accessory' and not found and brand:  # "samsung phone": that brand's phones, even though no name says "phone"
+        found = by_kind(list(Product.objects.filter(brand__iexact=brand)), kind, brand)
+    if brand or found or kind:  # a company or a product word was named: those matches are the answer. Look-alikes by meaning must not
+        prods = found   # join them, or the budget filter drops the real matches and keeps unrelated cheap items ("laptops under 50000" -> a pen)
     else:
         hits = INDEX.search(q, 'product', 14)
         ids = [d['id'] for s, d in hits if s > (0.5 if INDEX.semantic else 0.15)]
@@ -605,6 +658,17 @@ def retrieve(state: State) -> State:
         for p in found:  # name matches are the most precise signal: keep them in the pool
             if p.id not in {x.id for x in prods}:
                 prods.append(p)
+    alt, extra_ids = '', set()
+    if kind and kind != 'accessory':  # too few of what was asked for: add the same kind of product from other brands (best rated first), never a different kind
+        close = [p for p in prods if _within(p, lo, hi) and p.stock > 0]
+        if len(close) < 3:
+            have = {p.id for p in prods}
+            others = sorted((p for p in Product.objects.filter(stock__gt=0) if product_kind(p) == kind and p.id not in have and _within(p, lo, hi)),
+                            key=lambda p: -(p.rating or 0))
+            if others:
+                extras = others[:4 - len(close)]
+                prods, alt = prods + extras, ('topup' if close else 'none')
+                extra_ids = {p.id for p in extras}
     if lo or hi:
         within = [p for p in prods if _within(p, lo, hi)]
         if not within and prods:  # nothing in budget: show the cheapest matches and say so, instead of an empty answer
@@ -617,7 +681,14 @@ def retrieve(state: State) -> State:
         prods = head + _order([p for p in prods if p not in head], '', near)
     else:
         prods = _order(prods, sort, near)
-    return {'products': [product_dict(p) for p in prods[:4]], 'passages': passages}
+    if extra_ids:  # what the shopper asked for first, the other brands' alternatives after it
+        prods = [p for p in prods if p.id not in extra_ids] + [p for p in prods if p.id in extra_ids]
+    shown = prods[:4]
+    if all(t in KIND_WORDS for t in toks):  # "phones", "laptop": the shopper asked for the kind itself, so nothing here is a substitute
+        alt = ''
+    elif kind and alt != 'none' and any(any(c.isdigit() for c in t) and not any(t in set(re.findall(r'[a-z0-9]+', p.name.lower())) for p in shown) for t in toks):
+        alt = 'nomodel'  # "iphone 17": no shown product carries that model number, so say these are only the closest
+    return {'products': [product_dict(p) for p in shown], 'passages': passages, 'kind': kind, 'alt': alt}
 
 
 SORT_LABEL = {'price_asc': 'cheapest first', 'price_desc': 'most premium first', 'rating': 'best rated first', 'discount': 'biggest discount first',
@@ -675,7 +746,14 @@ def answer(state: State) -> State:
         top = prods[0]
         what = _label(state)
         scope = (f' under ₹{cap:,}' if cap and not lo else f' between ₹{lo:,} and ₹{cap:,}' if cap and lo else f' above ₹{lo:,}' if lo else '')
-        head = f"Here {'is' if len(prods) == 1 else 'are'} {len(prods)} option{'s' if len(prods) > 1 else ''}{' for **' + what + '**' if what else ''}{scope}{', ' + SORT_LABEL[sort] if sort else ''}."
+        label = KIND_LABEL.get(state.get('kind') or '', 'products')
+        if state.get('alt') == 'none':  # we have none of what was named: say so, and offer the same kind from other brands
+            head = f"We don't have **{what}** right now{scope}. Here {'is' if len(prods) == 1 else 'are'} {len(prods)} other {label[:-1] if len(prods) == 1 and label.endswith('s') else label} you may like."
+        elif state.get('alt') == 'nomodel':  # the exact model is not stocked: these are the closest
+            head = f"I don't have **{what}** exactly{scope}. Here {'is the closest' if len(prods) == 1 else f'are the {len(prods)} closest'}."
+        else:
+            more = f", plus similar {label} from other brands" if state.get('alt') == 'topup' else ''
+            head = f"Here {'is' if len(prods) == 1 else 'are'} {len(prods)} option{'s' if len(prods) > 1 else ''}{' for **' + what + '**' if what else ''}{scope}{more}{', ' + SORT_LABEL[sort] if sort else ''}."
         rating = f", {top['rating']:.1f}★" + (f" from {top['reviewCount']:,} reviews" if top.get('reviewCount') else '') if top.get('rating') else ''
         off = f", ₹{top['originalPrice'] - top['price']:,.0f} off" if top.get('originalPrice') and top['originalPrice'] > top['price'] else ''
         pick = f"My pick: **{top['name']}** at ₹{top['price']:,.0f}{off}{rating}."

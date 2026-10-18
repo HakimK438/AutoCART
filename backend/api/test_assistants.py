@@ -64,6 +64,18 @@ class SaathiTests(TestCase):
         r = self.chat('earbuds between 1000 and 2000')
         self.assertEqual([c['name'] for c in r['cards']], ['Zoom Earbuds'])
 
+    def test_a_budget_nothing_fits_never_shows_unrelated_products(self):
+        """Regression: "laptops under 50000" showed headphones and a pen. Look-alikes found by meaning joined the pool, the budget
+        filter dropped the real (over-budget) laptops, and the cheap unrelated items were all that was left."""
+        from unittest import mock
+        from api import agent_graph
+        by_meaning = lambda q, kind, k=12: [(0.9, {'kind': 'product', 'id': i, 'text': ''}) for i in ('p1', 'p2')] if kind == 'product' else []  # noqa: E731
+        with mock.patch.object(agent_graph.INDEX, 'search', side_effect=by_meaning):
+            r = self.chat('laptops under 20000')
+        names = [c['name'] for c in r['cards'] if c['type'] == 'product']
+        self.assertEqual(names, ['Basic Laptop 14', 'Titan Laptop 15'])  # the closest laptops, not earbuds
+        self.assertIn('Nothing matches', r['reply'])
+
     def test_product_cards_carry_the_photo_and_a_badge(self):
         card = self.chat('earbuds')['cards'][0]
         self.assertEqual((card['image'], card['type']), ('http://x/zoom.jpg', 'product'))
@@ -186,3 +198,69 @@ class MunimTests(TestCase):
         titles = [r['title'] for r in self.ask('recommend something')['recommendations']]
         self.assertIn('Pack 3 orders waiting', titles)
         self.assertIn('Answer 1 customer question', titles)
+
+
+class ProductKindTests(TestCase):
+    """Asking for one kind of product must never bring another kind (an "iphone" search showed a HomePod and a charger).
+    When the named product is not stocked, the same kind from other brands is offered, and the reply says so."""
+
+    def setUp(self):
+        self.c = authed(User.objects.create_user(email='kind@example.com', name='Kind Tester', password='pw-12345'))
+        for pid, name, brand, price, rating in (
+            ('a1', 'iPhone 13 Pro', 'Apple', 90000, 4.1), ('a2', 'Apple HomePod Mini', 'Apple', 9500, 4.6), ('a3', 'Apple iPhone Charger', 'Apple', 1900, 4.0),
+            ('a4', 'iPhone 12 Silicone Case', 'Apple', 2800, 4.0), ('s1', 'Samsung Galaxy S10', 'Samsung', 60000, 4.5), ('s2', 'Samsung Galaxy Tab S8', 'Samsung', 57000, 4.4),
+            ('r1', 'Realme C35', 'Realme', 14000, 4.2), ('o1', 'OnePlus Nord CE 4', 'OnePlus', 25000, 4.3), ('h1', 'Sony Wireless Headphones', 'Sony', 29000, 4.7),
+        ):
+            Product.objects.create(id=pid, name=name, slug=pid, category='Electronics', brand=brand, price=price, stock=5, rating=rating, reviewCount=50)
+
+    def ask(self, message):
+        r = self.c.post('/api/support/chat', {'message': message, 'sessionId': ''}, format='json').json()
+        return r['reply'], [c['name'] for c in r['cards'] if c['type'] == 'product']
+
+    PHONES = {'iPhone 13 Pro', 'Samsung Galaxy S10', 'Realme C35', 'OnePlus Nord CE 4'}
+
+    def test_kinds_are_read_from_names(self):
+        from api import agent_graph as g
+        self.assertEqual([g.query_kind(q) for q in ('iphone', 'phones', 'mobile', 'laptops', 'iphone charger', 'apple', 'sofa')], ['phone', 'phone', 'phone', 'laptop', 'accessory', '', ''])
+        self.assertEqual([g.product_kind(Product.objects.get(id=i)) for i in ('a1', 'a2', 'a3', 's1', 's2', 'h1')], ['phone', 'speaker', 'accessory', 'phone', 'tablet', 'audio'])
+
+    def test_iphone_brings_phones_and_never_a_speaker_charger_or_case(self):
+        reply, names = self.ask('iphone')
+        self.assertEqual(names[0], 'iPhone 13 Pro')
+        self.assertTrue(set(names) <= self.PHONES, names)  # only one iPhone is stocked, so other brands' phones fill the list
+        self.assertIn('similar phones from other brands', reply)
+
+    def test_phones_means_phones_of_every_brand(self):
+        for word in ('phones', 'phone', 'mobile'):
+            reply, names = self.ask(word)
+            self.assertEqual(set(names), self.PHONES, word)
+            self.assertNotIn("We don't have", reply)  # the shopper asked for the kind itself: nothing is a substitute
+
+    def test_a_brand_and_kind_lists_that_brands_phones_first(self):
+        _, names = self.ask('samsung phone')
+        self.assertEqual(names[0], 'Samsung Galaxy S10')
+        self.assertNotIn('Samsung Galaxy Tab S8', names)  # a tablet is not a phone
+
+    def test_a_brand_we_do_not_stock_gets_the_same_kind_from_other_brands(self):
+        reply, names = self.ask('nokia phone')
+        self.assertIn("We don't have", reply)
+        self.assertEqual(set(names), self.PHONES)
+
+    def test_a_budget_applies_to_the_substitutes_too(self):
+        reply, names = self.ask('iphone under 20000')
+        self.assertEqual(names, ['Realme C35'])  # the iPhone costs more, so only the in-budget phone is shown
+
+    def test_an_accessory_search_returns_accessories_only(self):
+        _, names = self.ask('iphone charger')
+        self.assertEqual(names[0], 'Apple iPhone Charger')
+        self.assertNotIn('iPhone 13 Pro', names)
+
+    def test_a_model_we_do_not_stock_is_called_the_closest_not_a_match(self):
+        reply, names = self.ask('iphone 17')
+        self.assertIn("I don't have", reply)
+        self.assertEqual(names[0], 'iPhone 13 Pro')
+
+    def test_a_kind_we_have_none_of_shows_nothing_unrelated(self):
+        reply, names = self.ask('laptop')
+        self.assertEqual(names, [])
+        self.assertIn('could not find', reply)
