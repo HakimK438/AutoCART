@@ -2,15 +2,18 @@
 Seller document processing: read an uploaded image/PDF, pull out the details we need,
 and compare them with what the seller typed into the application form.
 
-Privacy rules (Aadhaar Act / UIDAI):
-- Only a MASKED Aadhaar is accepted. A file that shows all 12 digits is rejected.
-- Only the last 4 digits are ever stored. Saved text is redacted first.
+Aadhaar handling:
+- Both masked and full Aadhaar copies are accepted. The number is stored exactly as read from the card, encrypted at rest
+  (secure_fields.py), and shown masked (XXXX-XXXX-1234) everywhere. Only the admin "reveal" action returns it in full, and that is audited.
+- The Verhoeff checksum is only a warning: a number that fails it is still stored as displayed, because OCR may have misread it.
+- Saved OCR text is always redacted first, so full numbers never appear in extractedFields, redactedText or logs.
 - Bank account numbers are kept as last 4 digits only.
 
 OCR is free and local (rapidocr-onnxruntime, pip only). If it is missing or fails,
 the document is flagged for manual review. Nothing here ever crashes an upload.
 """
 
+import difflib
 import os
 import re
 import logging
@@ -23,12 +26,23 @@ logger = logging.getLogger(__name__)
 REQUIRED_DOC_TYPES = ['AADHAAR', 'PAN', 'BANK_PROOF']  # everything else (name, address, store) is filled in from these three
 OCR_DOC_TYPES = {'AADHAAR', 'PAN', 'GST_CERTIFICATE', 'ADDRESS_PROOF', 'BANK_PROOF'}
 
-AADHAAR_PLAIN = re.compile(r'(?<![\dXx*])(\d{4})[\s-]?(\d{4})[\s-]?(\d{4})(?!\d)')
+# A standalone 12-digit number. The two extra checks skip the 16-digit Virtual ID (1234 5678 9012 3456), whose last 12 digits are not an Aadhaar number.
+AADHAAR_PLAIN = re.compile(r'(?<![\dXx*])(?<!\d{4}[ \-])(\d{4})[ \-]?(\d{4})[ \-]?(\d{4})(?![ \-]?\d)')
 AADHAAR_MASKED = re.compile(r'[Xx*]{4}[\s-]*[Xx*]{4}[\s-]*(\d{4})')
 DOB_RE = re.compile(r'(\d{2}[/-]\d{2}[/-]\d{4})')
 PIN_RE = re.compile(r'(?<!\d)([1-9]\d{5})(?!\d)')
-IFSC_RE = re.compile(r'\b([A-Z]{4}0[A-Z0-9]{6})\b')
+IFSC_RE = re.compile(r'(?<![A-Z0-9])([A-Z]{4}0[A-Z0-9]{6})')  # no trailing \b: the OCR drops spaces, so "SBIN0001234A/cNo..." must still match
 ACCOUNT_RE = re.compile(r'(?<!\d)(\d{9,18})(?!\d)')
+# The number written after "A/c No", "Account Number" and the like. Preferred over the first long number on the page, which can be a CIF or customer ID.
+ACCOUNT_LABELLED = re.compile(r'(?<![A-Za-z])(?:a/?c|account)\s*(?:no|number|num|#)?\.?\s*[:\-]?\s*((?:\d[ \-]?){9,18})', re.I)
+# The first four letters of an IFSC name the bank, so the bank can be told without trusting misread OCR text.
+IFSC_BANKS = {
+    'SBIN': 'State Bank of India', 'HDFC': 'HDFC Bank', 'ICIC': 'ICICI Bank', 'UTIB': 'Axis Bank', 'PUNB': 'Punjab National Bank', 'BARB': 'Bank of Baroda',
+    'CNRB': 'Canara Bank', 'UBIN': 'Union Bank of India', 'KKBK': 'Kotak Mahindra Bank', 'INDB': 'IndusInd Bank', 'YESB': 'Yes Bank', 'IDFB': 'IDFC FIRST Bank',
+    'BKID': 'Bank of India', 'CBIN': 'Central Bank of India', 'IDIB': 'Indian Bank', 'IOBA': 'Indian Overseas Bank', 'UCBA': 'UCO Bank', 'MAHB': 'Bank of Maharashtra',
+    'FDRL': 'Federal Bank', 'SIBL': 'South Indian Bank', 'KARB': 'Karnataka Bank', 'KVBL': 'Karur Vysya Bank', 'RATN': 'RBL Bank', 'AUBL': 'AU Small Finance Bank',
+    'BDBL': 'Bandhan Bank', 'IBKL': 'IDBI Bank', 'PSIB': 'Punjab & Sind Bank',
+}
 
 _NOT_NAMES = {
     'government', 'govt', 'india', 'aadhaar', 'unique', 'identification', 'authority', 'male', 'female', 'transgender',
@@ -116,20 +130,59 @@ def _pretty_name(line: str) -> str:
     return re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', line.strip()).title()
 
 
+# Card headings that must never be read as a person's name. Checked inside the line with spaces removed,
+# because the OCR often returns "INCOMETAXDEPARTMENT" or "GOVTOFINDIA" as one word.
+_HEADING_STEMS = ('income', 'department', 'government', 'govt', 'india', 'permanent', 'account', 'number', 'signature', 'aadhaar', 'authority', 'identification', 'birth')
+
+
 def _looks_like_name(line: str) -> bool:
     words = re.findall(r"[A-Za-z][A-Za-z.'-]*", line)
     if not 1 <= len(words) <= 5 or re.search(r'\d', line):
         return False
     if re.sub(r"[A-Za-z .'-]", '', line):
         return False
+    if any(stem in re.sub(r'[^a-z]', '', line.lower()) for stem in _HEADING_STEMS):
+        return False
     return not any(w.lower().strip('.') in _NOT_NAMES for w in words)
 
 
+def plausible_name(name: Optional[str]) -> bool:
+    """False for OCR fragments such as "Fa". A name needs at least 5 letters and one word of 3 or more.
+    A single long token is allowed: the OCR often drops the spaces ("RAHULMOHANSHARMA") and another document can supply the spacing."""
+    words = re.findall(r"[A-Za-z]+", name or '')
+    return len(''.join(words)) >= 5 and max((len(w) for w in words), default=0) >= 3
+
+
+def name_fits_pan(name: str, pan: Optional[str]) -> bool:
+    """The 5th character of an individual's PAN (4th is 'P') is the first letter of the surname, so a name that cannot contain it was misread."""
+    if not pan or len(pan) < 5 or pan[3] != 'P':
+        return True
+    words = re.findall(r"[A-Za-z]+", name)
+    if len(words) < 2:  # run together by the OCR: the surname cannot be found
+        return True
+    return pan[4].upper() in {w[0].upper() for w in words}
+
+
+_VERHOEFF_D = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5], [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7], [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+               [5, 9, 8, 7, 6, 0, 4, 3, 2, 1], [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3], [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]]
+_VERHOEFF_P = [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4], [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+               [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1], [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]]
+
+
+def verhoeff_valid(number: str) -> bool:
+    """True if the digits pass the Verhoeff checksum that every real Aadhaar number carries in its last digit."""
+    c = 0
+    for i, ch in enumerate(reversed(number)):
+        c = _VERHOEFF_D[c][_VERHOEFF_P[i % 8][int(ch)]]
+    return c == 0
+
+
 def parse_aadhaar(text: str) -> Dict[str, Any]:
-    """Details from a masked Aadhaar. Sets 'unmasked' if all 12 digits are visible."""
+    """Details from an Aadhaar, masked or full. 'aadhaarNumber' (all 12 digits, as read) is set only when the card shows them."""
     masked = AADHAAR_MASKED.search(text)
-    if AADHAAR_PLAIN.search(text) and not masked:
-        return {'unmasked': True}
+    plain = None if masked else AADHAAR_PLAIN.search(text)
+    number = ''.join(plain.groups()) if plain else None
+    last4 = masked.group(1) if masked else (number[-4:] if number else None)
 
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     dob_idx = next((i for i, l in enumerate(lines) if DOB_RE.search(l) or re.search(r'year of birth|dob', l, re.I)), None)
@@ -157,8 +210,9 @@ def parse_aadhaar(text: str) -> Dict[str, Any]:
         'gender': gender.group(1).title() if gender else None,
         'address': address,
         'pincode': pin.group(1) if pin else None,
-        'aadhaarLast4': masked.group(1) if masked else None,
-        'aadhaarMasked': f"XXXX-XXXX-{masked.group(1)}" if masked else None,
+        'aadhaarNumber': number,
+        'aadhaarLast4': last4,
+        'aadhaarMasked': f"XXXX-XXXX-{last4}" if last4 else None,
     }
 
 
@@ -177,8 +231,13 @@ def parse_pan(text: str) -> Dict[str, Any]:
         caps = [_pretty_name(l) for l in lines if _looks_like_name(l)]
         name = caps[0] if caps else None
         father = father or (caps[1] if len(caps) > 1 else None)
+    pan_no = pan.group(0) if pan else None
+    if name and not (plausible_name(name) and name_fits_pan(name, pan_no)):
+        name = None  # better empty than wrong: the form asks the seller to type it
+    if father and not plausible_name(father):
+        father = None
     dob = DOB_RE.search(text)
-    return {'pan': pan.group(0) if pan else None, 'name': name, 'fatherName': father, 'dob': dob.group(1) if dob else None}
+    return {'pan': pan_no, 'name': name, 'fatherName': father, 'dob': dob.group(1) if dob else None}
 
 
 def parse_gst(text: str) -> Dict[str, Any]:
@@ -224,9 +283,27 @@ def lookup_pin(pin: str) -> Dict[str, Any]:
     return {}
 
 
+def canonical_bank(name: Optional[str]) -> Optional[str]:
+    """A misread bank name matched to the real one ("State Bank Of Indla" -> "State Bank of India"). Unknown names are returned unchanged."""
+    key = re.sub(r'[^a-z]', '', (name or '').lower())  # spaces are ignored: the OCR drops them anyway
+    known = {re.sub(r'[^a-z]', '', b.lower()): b for b in IFSC_BANKS.values()}
+    near = difflib.get_close_matches(key, list(known), n=1, cutoff=0.8) if key else []
+    return known[near[0]] if near else name
+
+
+def _account_number(text: str) -> str:
+    """The account number: the one after an "A/c No" label if there is one, else the first long number (which may not be the account)."""
+    labelled = ACCOUNT_LABELLED.search(text)
+    digits = re.sub(r'\D', '', labelled.group(1)) if labelled else ''
+    if 9 <= len(digits) <= 18:
+        return digits
+    first = ACCOUNT_RE.search(text)
+    return first.group(1) if first else ''
+
+
 def parse_bank(text: str) -> Dict[str, Any]:
     ifsc = IFSC_RE.search(text.upper())
-    acct = ACCOUNT_RE.search(text)
+    acct = _account_number(text)
     lines = [l.strip() for l in text.splitlines() if l.strip()]
     holder = None
     for i, line in enumerate(lines):
@@ -237,12 +314,15 @@ def parse_bank(text: str) -> Dict[str, Any]:
         if cand and (_looks_like_name(cand) or (BUSINESS_WORDS.search(cand) and not re.search(r'\d{5,}', cand))):
             holder = _pretty_name(cand)
             break
-    bank_line = next((l for l in lines if re.search(r'\bbank\b', l, re.I) and len(l) < 60), None)
-    out = {'ifsc': ifsc.group(1) if ifsc else None, 'accountLast4': acct.group(1)[-4:] if acct else None, 'accountHolder': holder,
-           'bankName': _pretty_name(bank_line) if bank_line else None}
-    if out['ifsc']:
-        for k, v in lookup_ifsc(out['ifsc']).items():
-            if v and (k != 'bankName' or not out['bankName']):
+    bank_line = next((l for l in lines if re.search(r'bank', l, re.I) and len(l) < 60), None)  # no \b: "StateBankofIndia" has no word breaks
+    ifsc_no = ifsc.group(1) if ifsc else None
+    # The IFSC names the bank for certain; the printed name can be misread, so it is only used to match against known banks.
+    bank_name = IFSC_BANKS.get(ifsc_no[:4]) if ifsc_no else None
+    out = {'ifsc': ifsc_no, 'accountLast4': acct[-4:] if acct else None, 'accountHolder': holder,
+           'bankName': bank_name or canonical_bank(_pretty_name(bank_line) if bank_line else None)}
+    if ifsc_no:
+        for k, v in lookup_ifsc(ifsc_no).items():  # the live lookup (branch, city, official bank name) wins over anything read from the page
+            if v:
                 out[k] = v
     return out
 
@@ -290,7 +370,7 @@ def build_autofill(user, app, docs) -> Dict[str, Any]:
         if value:
             fields[key], src[key] = value, source
 
-    names = [(n, s) for n, s in ((pan.get('name'), 'PAN card'), (aad.get('name'), 'Aadhaar'), (bank.get('accountHolder'), 'bank proof')) if n]
+    names = [(n, s) for n, s in ((pan.get('name'), 'PAN card'), (aad.get('name'), 'Aadhaar'), (bank.get('accountHolder'), 'bank proof')) if n and plausible_name(n)]
     if names:
         name, source = names[0]
         if ' ' not in name:  # OCR ran the words together ("Rahulmohansharma"): use a spaced spelling of the same name from another document
@@ -318,7 +398,7 @@ def build_autofill(user, app, docs) -> Dict[str, Any]:
 
 def process_document(doc_type: str, path: str, mime: str = '') -> Dict[str, Any]:
     """Reads one uploaded file. Returns fields ready to save on a SellerDocument."""
-    out: Dict[str, Any] = {'ocrStatus': 'NOT_REQUIRED', 'extractedFields': {}, 'redactedText': '', 'confidence': 0.0, 'warnings': []}
+    out: Dict[str, Any] = {'ocrStatus': 'NOT_REQUIRED', 'extractedFields': {}, 'redactedText': '', 'confidence': 0.0, 'warnings': [], 'aadhaarNumber': None}
     if doc_type not in OCR_DOC_TYPES:
         return out
 
@@ -334,14 +414,12 @@ def process_document(doc_type: str, path: str, mime: str = '') -> Dict[str, Any]
 
     if doc_type == 'AADHAAR':
         fields = parse_aadhaar(text)
-        if fields.get('unmasked'):
-            # Do not keep anything from this file.
-            out.update(ocrStatus='REJECTED', extractedFields={}, redactedText='')
-            out['warnings'].append('This Aadhaar shows all 12 digits. Upload the masked Aadhaar from myAadhaar (first 8 digits hidden).')
-            return out
-        wanted = ('name', 'dob', 'gender', 'address', 'pincode', 'aadhaarMasked', 'aadhaarLast4')
+        wanted = ('name', 'dob', 'gender', 'address', 'pincode', 'aadhaarMasked', 'aadhaarLast4')  # never the full number: it travels in out['aadhaarNumber']
+        out['aadhaarNumber'] = fields.get('aadhaarNumber')
         if not fields.get('aadhaarLast4'):
-            out['warnings'].append('We could not find the masked Aadhaar number (XXXX XXXX 1234).')
+            out['warnings'].append('We could not find the Aadhaar number on this file.')
+        elif out['aadhaarNumber'] and not verhoeff_valid(out['aadhaarNumber']):
+            out['warnings'].append('The Aadhaar number may be misread (it fails the checksum). It is saved as shown on the card; please check it.')
     elif doc_type == 'PAN':
         fields, wanted = parse_pan(text), ('pan', 'name', 'fatherName', 'dob')
         if not fields.get('pan'):

@@ -29,6 +29,7 @@ from .models import (
 )
 from .ocr_service import GSTIN_REGEX, PAN_REGEX, DocumentOCRService
 from .location_service import resolve_coordinates
+from .secure_fields import decrypt, encrypt
 from .serializers import SellerApplicationAuditSerializer, SellerApplicationSerializer
 from .views import get_user_from_token
 
@@ -245,7 +246,9 @@ def _apply_result(app, doc, result):
     doc.save()
     if doc.docType == 'AADHAAR':
         app.aadhaarLast4 = (doc.extractedFields or {}).get('aadhaarLast4', '')
-        app.save(update_fields=['aadhaarLast4'])
+        # The full number exactly as read from the card, encrypted. A new upload that shows no full number clears the old one, so it never goes stale.
+        app.aadhaarNumberEnc = encrypt(result.get('aadhaarNumber') or '')
+        app.save(update_fields=['aadhaarLast4', 'aadhaarNumberEnc'])
     if doc.ocrStatus == 'REJECTED':  # an unmasked Aadhaar is not kept at all
         doc.file.delete(save=False)
         doc.file = ''
@@ -499,6 +502,21 @@ def admin_seller_application_action_view(request, pk):
                f"{app.companyName or app.applicantName}: {'approved' if action == 'APPROVE' else 'reminder sent' if action == 'REQUEST_INFO' else action.lower()} by autopilot.", app.id)
     return Response({'success': True, 'applicationId': app.id, 'previousStatus': previous, 'currentStatus': new_status,
                      'profile': _profile(app, user)})
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def admin_seller_aadhaar_reveal_view(request, pk):
+    """Admin only: the full Aadhaar number of an application. POST (never cached or prefetched) and every use is written to the audit trail."""
+    user, err = _require(request, ADMIN_ROLES)
+    if err:
+        return err
+    app = _load(pk)
+    number = decrypt(app.aadhaarNumberEnc) if app else ''
+    if not number:
+        return Response({'detail': 'No full Aadhaar number is stored for this application.'}, status=http.HTTP_404_NOT_FOUND)
+    _audit(app, app.status, app.status, 'AADHAAR_REVEALED', user.email, 'Admin viewed the full Aadhaar number.')
+    return Response({'aadhaarNumber': f'{number[:4]} {number[4:8]} {number[8:]}', 'masked': f'XXXX-XXXX-{number[-4:]}'})
 
 
 @api_view(['GET'])

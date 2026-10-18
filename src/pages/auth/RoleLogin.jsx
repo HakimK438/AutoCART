@@ -102,7 +102,7 @@ export default function RoleLogin({ role }) {
               <li data-on="true"><span>1</span>Account</li><li><span>2</span>Documents</li><li><span>3</span>Review</li>
             </ol>
             <h2 className="ac-display">Create your seller account</h2>
-            <p className="ac-muted" style={{ margin: '6px 0 18px' }}>Step 1 of 3. Next you upload your Aadhaar (masked), PAN and bank proof. We read them and fill in everything else. Our team reviews it before your store goes live.</p>
+            <p className="ac-muted" style={{ margin: '6px 0 18px' }}>Step 1 of 3. Next you upload your Aadhaar, PAN and bank proof. We read them and fill in everything else. Our team reviews it before your store goes live.</p>
             {error && <div className="ac-box" role="alert" style={{ borderColor: 'var(--coral)', color: 'var(--coral)', marginBottom: 16, padding: 14, fontWeight: 600 }}>{error}</div>}
             <div className="ac-field"><label htmlFor="sr-name">Full name</label>
               <input id="sr-name" className="ac-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} autoComplete="name" required /></div>

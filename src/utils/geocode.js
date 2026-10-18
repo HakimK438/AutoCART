@@ -6,9 +6,12 @@ export async function reverseGeocode(lat, lng) {
   try {
     const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1&zoom=18&lat=${lat}&lon=${lng}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) return null;
-    const a = (await res.json()).address || {};
-    const area = a.suburb || a.neighbourhood || a.city_district || a.quarter || '';
-    const line = [a.house_number, a.road, area].filter(Boolean).join(', ');
+    const body = await res.json();
+    const a = body.address || {};
+    const area = a.suburb || a.neighbourhood || a.city_district || a.quarter || a.hamlet || '';
+    const place = a.amenity || a.shop || a.building || a.office || '';
+    // Never return an empty street line: some spots have no road or suburb, so fall back to the first parts of OpenStreetMap's own address text.
+    const line = [place, a.house_number, a.road, area].filter(Boolean).join(', ') || String(body.display_name || '').split(',').slice(0, 3).join(',').trim();
     const city = a.city || a.town || a.village || a.county || a.state_district || '';
     return { line, area, city, state: a.state || '', pincode: (a.postcode || '').replace(/\D/g, '').slice(0, 6) };
   } catch {

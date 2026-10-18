@@ -3,7 +3,7 @@ import { UserPlus, PackagePlus, ShoppingBag, Wallet } from 'lucide-react';
 import api from '../../services/api';
 
 const STEPS = [
-  { icon: UserPlus, t: 'Join free', d: 'Upload your PAN and masked Aadhaar. We read them for you and an admin approves you.' },
+  { icon: UserPlus, t: 'Join free', d: 'Upload your PAN and Aadhaar. We read them for you and an admin approves you.' },
   { icon: PackagePlus, t: 'List your products', d: 'Add items and stock. Nearby shoppers see your store and what is in stock.' },
   { icon: ShoppingBag, t: 'Get orders', d: 'Customers buy for delivery or pick up in your store. You pack and hand over.' },
   { icon: Wallet, t: 'Keep your earnings', d: 'You pay a small commission only when something sells. No joining, listing or monthly fee.' },

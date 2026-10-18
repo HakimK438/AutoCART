@@ -251,7 +251,8 @@ class SellerApplication(models.Model):
     storeLongitude = models.FloatField(null=True, blank=True)
     plannedProducts = models.JSONField(default=list, blank=True) # [{ name, category, approxPrice }]
     identityDetails = models.JSONField(default=dict, blank=True) # masked fields read from Aadhaar / PAN
-    aadhaarLast4 = models.CharField(max_length=4, blank=True, default='') # never store the full Aadhaar number
+    aadhaarLast4 = models.CharField(max_length=4, blank=True, default='')
+    aadhaarNumberEnc = models.TextField(blank=True, default='') # the full 12-digit number as read from the card, encrypted (api/secure_fields.py); never serialised
     businessType = models.CharField(max_length=50, default='Retailer')
     productCategories = models.JSONField(default=list, blank=True)
     gstin = models.CharField(max_length=30, blank=True, default='')

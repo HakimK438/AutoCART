@@ -138,7 +138,7 @@ export default function SellerProfileView({ p, showIdentity = true }) {
     try {
       const { data } = await api.get(doc.fileUrl.replace(/^\/api/, ''), { responseType: 'blob' });
       setPreview({ url: URL.createObjectURL(data), type: doc.mimeType, name: DOC_LABEL[doc.docType] });
-    } catch { setFileErr('This file is not available (an unmasked Aadhaar is never kept).'); }
+    } catch { setFileErr('This file is not available.'); }
   };
   const OpenBtn = ({ d }) => (d
     ? <button onClick={() => view(d)} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-semibold whitespace-nowrap hover:bg-gray-50"><FileText className="w-4 h-4" /> Open document</button>

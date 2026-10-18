@@ -42,7 +42,7 @@ from .order_views import (
 from .commission import commission_view
 from .assistant_memory import assistant_memory_view
 from .support_views import support_last_address_view
-from .seller_views import admin_triage_view, admin_seller_report_view, admin_sellers_overview_view, seller_application_autofill_view, admin_seller_detail_view, seller_application_start_view, seller_application_product_image_view
+from .seller_views import admin_seller_aadhaar_reveal_view, admin_triage_view, admin_seller_report_view, admin_sellers_overview_view, seller_application_autofill_view, admin_seller_detail_view, seller_application_start_view, seller_application_product_image_view
 from .product_images import serve_photo
 from .role_views import seller_stock_log_view
 from .upi_payments import upi_check_view, order_upi_view, order_upi_reference_view, payment_confirm_view, seller_payout_settings_view, payments_admin_view
@@ -187,6 +187,7 @@ urlpatterns = [
     re_path(r'^seller/applications/(?P<pk>[^/]+)/submit/?$', seller_application_submit_view, name='seller_application_submit'),
     re_path(r'^seller/applications/(?P<pk>[^/]+)/?$', seller_application_detail_view, name='seller_application_detail'),
     re_path(r'^admin/seller-applications/(?P<pk>[^/]+)/action/?$', admin_seller_application_action_view, name='admin_seller_application_action'),
+    re_path(r'^admin/seller-applications/(?P<pk>[^/]+)/aadhaar/?$', admin_seller_aadhaar_reveal_view, name='admin_seller_aadhaar_reveal'),
 
     # Router endpoints (both with and without trailing slash)
     path('', include(router_no_slash.urls)),

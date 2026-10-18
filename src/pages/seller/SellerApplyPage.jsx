@@ -11,7 +11,7 @@ import '../../storefront/storefront.css';
 import '../../storefront/forms.css';
 
 const DOCS = [
-  { type: 'AADHAAR', key: 'aadhaar', label: 'Aadhaar (masked copy)', hint: 'The masked Aadhaar from myAadhaar, first 8 digits hidden. We keep only the last 4.' },
+  { type: 'AADHAAR', key: 'aadhaar', label: 'Aadhaar card', hint: 'A clear photo or PDF of your Aadhaar (front side with the number). The number is stored encrypted and shown to our team only as XXXX XXXX 1234.' },
   { type: 'PAN', key: 'pan', label: 'PAN card', hint: 'A clear photo or PDF of your PAN card.' },
   { type: 'BANK_PROOF', key: 'bank', label: 'Bank proof', hint: 'A cancelled cheque or the first page of your passbook.' },
 ];

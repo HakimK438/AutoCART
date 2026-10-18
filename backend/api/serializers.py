@@ -69,7 +69,7 @@ class SellerApplicationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SellerApplication
-        fields = '__all__'
+        exclude = ('aadhaarNumberEnc',)  # the encrypted Aadhaar number is only ever returned by the admin "reveal" action
 
 class OrderFulfillmentSerializer(serializers.ModelSerializer):
     storeName = serializers.CharField(source='store.name', read_only=True)
